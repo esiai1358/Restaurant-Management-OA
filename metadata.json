@@ -1,0 +1,6 @@
+{
+  "name": "Omran Azarestan Restaurant Management",
+  "description": "سامانه مدیریت و گزارش‌گیری آمار روزانه و ماهیانه رستوران شرکت عمران آذرستان پروژه بوشهر - پیمانکار آقای مرادی",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

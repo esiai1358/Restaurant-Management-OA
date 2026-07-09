@@ -1,0 +1,557 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useMemo } from 'react';
+import { DailyLog, Meal, CustomField } from '../types';
+import { formatToJalali, getJalaliMonthName, toPersianDigits } from '../utils/farsi';
+import { printToPDF } from '../utils/exportHelpers';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  AreaChart,
+  Area,
+} from 'recharts';
+import {
+  TrendingUp,
+  FileSpreadsheet,
+  AlertCircle,
+  TrendingDown,
+  CalendarDays,
+  Activity,
+  PlusCircle,
+  Eye,
+  Settings,
+  Scale,
+  DollarSign,
+  ChevronLeft,
+  ChevronRight,
+  Filter,
+  Printer,
+} from 'lucide-react';
+
+interface DashboardReportsProps {
+  logs: DailyLog[];
+  meals: Meal[];
+  customFields: CustomField[];
+}
+
+export default function DashboardReports({ logs, meals, customFields }: DashboardReportsProps) {
+  // Filters state
+  const [selectedYear, setSelectedYear] = useState<number>(1405); // Persian Year (matching Gregorian 2026)
+  const [selectedMonth, setSelectedMonth] = useState<number>(4); // تیر (July is roughly month 4 of Solar year)
+  const [selectedMealFilter, setSelectedMealFilter] = useState<string>('all'); // 'all' or specific meal id
+
+  // Helper lists for Persian Months
+  const JALALI_MONTHS = [
+    { num: 1, name: 'فروردین' },
+    { num: 2, name: 'اردیبهشت' },
+    { num: 3, name: 'خرداد' },
+    { num: 4, name: 'تیر' },
+    { num: 5, name: 'مرداد' },
+    { num: 6, name: 'شهریور' },
+    { num: 7, name: 'مهر' },
+    { num: 8, name: 'آبان' },
+    { num: 9, name: 'آذر' },
+    { num: 10, name: 'دی' },
+    { num: 11, name: 'بهمن' },
+    { num: 12, name: 'اسفند' },
+  ];
+
+  // Map greg date to Jalali year and month, and filter logs
+  const filteredLogs = useMemo(() => {
+    return logs.filter((log) => {
+      // Convert log Gregorian date to Jalali
+      if (!log.date) return false;
+      const [y, m, d] = log.date.split('-').map(Number);
+      if (isNaN(y) || isNaN(m) || isNaN(d)) return false;
+      
+      const g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 335];
+      const gy2 = m > 2 ? y + 1 : y;
+      let g_day_no = 365 * y + Math.floor((gy2 + 3) / 4) - Math.floor((gy2 + 99) / 100) + Math.floor((gy2 + 399) / 400) - 80 + d + g_d_m[m - 1];
+      let jy = 979 + 33 * Math.floor(g_day_no / 12053) + 4 * Math.floor((g_day_no % 12053) / 1461);
+      g_day_no %= 1461;
+      if (g_day_no >= 366) {
+        jy += Math.floor((g_day_no - 1) / 365);
+        g_day_no = (g_day_no - 1) % 365;
+      }
+      let j_day_no = g_day_no + 78;
+      if (j_day_no >= 366) {
+        jy += 1;
+        j_day_no -= 366;
+      }
+      const jm = 1 + Math.floor(j_day_no / 31);
+
+      // Apply Year & Month filters
+      const matchYearMonth = jy === selectedYear && jm === selectedMonth;
+      const matchMeal = selectedMealFilter === 'all' || log.mealId === selectedMealFilter;
+      
+      return matchYearMonth && matchMeal;
+    });
+  }, [logs, selectedYear, selectedMonth, selectedMealFilter]);
+
+  // Aggregate monthly statistics
+  const aggregates = useMemo(() => {
+    let totalOfficeAnnounced = 0;
+    let totalCookingInstruction = 0;
+    let totalContractorCooked = 0;
+    let totalReceivedInRestaurant = 0;
+    let totalForgottenTicket = 0;
+    let totalTakeaways = 0;
+    let totalSystemOutput = 0;
+    let count = 0;
+
+    filteredLogs.forEach((log) => {
+      totalOfficeAnnounced += log.officeAnnounced;
+      totalCookingInstruction += log.cookingInstruction;
+      totalContractorCooked += log.contractorCooked;
+      totalReceivedInRestaurant += log.receivedInRestaurant;
+      totalForgottenTicket += log.forgottenTicket;
+      totalTakeaways += log.takeaways;
+      totalSystemOutput += log.systemOutput;
+      count++;
+    });
+
+    const totalDistributed = totalReceivedInRestaurant + totalForgottenTicket + totalTakeaways;
+    const foodWastage = totalContractorCooked - totalDistributed;
+    const efficiency = totalContractorCooked > 0 ? (totalDistributed / totalContractorCooked) * 100 : 0;
+
+    return {
+      officeAnnounced: totalOfficeAnnounced,
+      cookingInstruction: totalCookingInstruction,
+      contractorCooked: totalContractorCooked,
+      receivedInRestaurant: totalReceivedInRestaurant,
+      forgottenTicket: totalForgottenTicket,
+      takeaways: totalTakeaways,
+      systemOutput: totalSystemOutput,
+      totalDistributed,
+      foodWastage,
+      efficiency,
+      count,
+    };
+  }, [filteredLogs]);
+
+  // Transform filtered logs for chart rendering (grouped by day)
+  const chartData = useMemo(() => {
+    // Group logs by date
+    const dateGroups: Record<string, {
+      dateLabel: string;
+      officeAnnounced: number;
+      cookingInstruction: number;
+      contractorCooked: number;
+      receivedInRestaurant: number;
+      forgottenTicket: number;
+      takeaways: number;
+      systemOutput: number;
+    }> = {};
+
+    filteredLogs.forEach((log) => {
+      const shamsi = formatToJalali(log.date);
+      const dayOnly = shamsi.split('/')[2]; // Extract just the day number
+      const label = `روز ${dayOnly}`;
+
+      if (!dateGroups[log.date]) {
+        dateGroups[log.date] = {
+          dateLabel: label,
+          officeAnnounced: 0,
+          cookingInstruction: 0,
+          contractorCooked: 0,
+          receivedInRestaurant: 0,
+          forgottenTicket: 0,
+          takeaways: 0,
+          systemOutput: 0,
+        };
+      }
+
+      dateGroups[log.date].officeAnnounced += log.officeAnnounced;
+      dateGroups[log.date].cookingInstruction += log.cookingInstruction;
+      dateGroups[log.date].contractorCooked += log.contractorCooked;
+      dateGroups[log.date].receivedInRestaurant += log.receivedInRestaurant;
+      dateGroups[log.date].forgottenTicket += log.forgottenTicket;
+      dateGroups[log.date].takeaways += log.takeaways;
+      dateGroups[log.date].systemOutput += log.systemOutput;
+    });
+
+    // Convert to sorted array
+    return Object.entries(dateGroups)
+      .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+      .map(([_, val]) => val);
+  }, [filteredLogs]);
+
+  // CSV Exporter for local reporting (highly useful)
+  const exportToCSV = () => {
+    if (filteredLogs.length === 0) {
+      alert('داده‌ای برای خروجی گرفتن وجود ندارد.');
+      return;
+    }
+
+    let csvContent = '\uFEFF'; // UTF-8 BOM for Persian excel alignment
+    csvContent += 'تاریخ,وعده غذایی,آمار اداری,دستور پخت,پخت پیمانکار,دریافت رستوران,فیش فراموشی,بیرون بر,خروجی سیستم,تعداد پرسنل\n';
+
+    filteredLogs.forEach((log) => {
+      const mealName = meals.find((m) => m.id === log.mealId)?.name || log.mealId;
+      const shamsi = formatToJalali(log.date);
+      csvContent += `${shamsi},${mealName},${log.officeAnnounced},${log.cookingInstruction},${log.contractorCooked},${log.receivedInRestaurant},${log.forgottenTicket},${log.takeaways},${log.systemOutput},${log.workshopPersonnel}\n`;
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `گزارش_رستوران_${selectedYear}_${selectedMonth}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Printable PDF Exporter for high-quality reports
+  const exportToPDF = () => {
+    if (filteredLogs.length === 0) {
+      alert('داده‌ای برای خروجی گرفتن وجود ندارد.');
+      return;
+    }
+
+    const monthName = getJalaliMonthName(selectedMonth);
+    const headers = ['تاریخ', 'وعده', 'آمار اداری', 'دستور پخت', 'پخت پیمانکار', 'دریافت واقعی', 'فیش فراموشی', 'بیرون‌بر', 'خروجی سیستم', 'پرت غذا'];
+
+    const rows = filteredLogs.map((log) => {
+      const mealName = meals.find((m) => m.id === log.mealId)?.name || log.mealId;
+      const shamsi = formatToJalali(log.date);
+      const realConsumption = log.receivedInRestaurant + log.forgottenTicket + log.takeaways;
+      const wastage = log.contractorCooked - realConsumption;
+      
+      return [
+        shamsi,
+        mealName,
+        log.officeAnnounced,
+        log.cookingInstruction,
+        log.contractorCooked,
+        log.receivedInRestaurant,
+        log.forgottenTicket,
+        log.takeaways,
+        log.systemOutput,
+        wastage
+      ];
+    });
+
+    const summaries = [
+      { label: 'کل آمار اداری ماه', value: aggregates.officeAnnounced },
+      { label: 'کل غذای پخته شده', value: aggregates.contractorCooked },
+      { label: 'کل غذای توزیع شده', value: aggregates.totalDistributed },
+      { label: 'کل پرت غذای ماه (پرس)', value: aggregates.foodWastage },
+    ];
+
+    printToPDF(
+      `گزارش عملکرد و مغایرت تجمعی ماهانه رستوران کارگاهی بوشهر`,
+      `دوره گزارش: ${monthName} ماه سال ${selectedYear} | تعداد کل رکوردها: ${aggregates.count} مورد`,
+      headers,
+      rows,
+      summaries
+    );
+  };
+
+  return (
+    <div className="space-y-6" id="dashboard-reports">
+      
+      {/* Filters Card */}
+      <div className="bg-[#0f172a] rounded-2xl border border-slate-800 shadow-xl p-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4 mb-5">
+          <div className="flex items-center gap-2">
+            <Filter className="h-5 w-5 text-emerald-500" />
+            <h2 className="font-bold text-slate-50 text-lg">بخش دوم: سیستم گزارشات ماهیانه و آمار تجمعی</h2>
+          </div>
+          
+          <div className="flex flex-wrap items-center gap-3 self-end md:self-auto">
+            <button
+              onClick={exportToCSV}
+              className="bg-emerald-600 hover:bg-emerald-700 text-slate-950 font-extrabold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-sm shadow-emerald-600/10 transition-all"
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+              خروجی اکسل (CSV)
+            </button>
+
+            <button
+              onClick={exportToPDF}
+              className="bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 font-extrabold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-sm transition-all"
+            >
+              <Printer className="h-4 w-4 text-amber-400" />
+              خروجی گزارش PDF
+            </button>
+          </div>
+        </div>
+
+        {/* Filters Form Controls */}
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-slate-300 text-xs font-semibold mb-1.5">انتخاب سال شمسی</label>
+            <select
+              value={selectedYear}
+              onChange={(e) => setSelectedYear(Number(e.target.value))}
+              className="w-full px-3 py-2 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-950 text-slate-100 font-mono"
+            >
+              <option value="1405" className="bg-slate-950 text-slate-100">۱۴۰۵</option>
+              <option value="1404" className="bg-slate-950 text-slate-100">۱۴۰۴</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-slate-300 text-xs font-semibold mb-1.5">انتخاب ماه</label>
+            <select
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(Number(e.target.value))}
+              className="w-full px-3 py-2 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-950 text-slate-100"
+            >
+              {JALALI_MONTHS.map((m) => (
+                <option key={m.num} value={m.num} className="bg-slate-950 text-slate-100">
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-slate-300 text-xs font-semibold mb-1.5">تفکیک وعده غذایی</label>
+            <select
+              value={selectedMealFilter}
+              onChange={(e) => setSelectedMealFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-950 text-slate-100"
+            >
+              <option value="all" className="bg-slate-950 text-slate-100">همه وعده‌ها (مجموع کل)</option>
+              {meals.map((m) => (
+                <option key={m.id} value={m.id} className="bg-slate-950 text-slate-100">
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Quick status badge */}
+          <div className="flex items-center justify-center bg-slate-950 border border-slate-800 rounded-xl p-3">
+            <div className="text-center">
+              <p className="text-[10px] text-slate-400">تعداد روزهای ثبت‌شده در این ماه</p>
+              <p className="font-extrabold text-emerald-400 text-lg font-mono">
+                {toPersianDigits(Math.ceil(filteredLogs.length / (selectedMealFilter === 'all' ? meals.filter(m => m.isActive).length || 1 : 1)))} روز
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {filteredLogs.length === 0 ? (
+        <div className="bg-slate-900/40 rounded-2xl border border-dashed border-slate-800 p-12 text-center max-w-lg mx-auto">
+          <CalendarDays className="h-12 w-12 text-slate-700 mx-auto mb-3" />
+          <h3 className="font-bold text-slate-100 text-base mb-1">داده‌ای یافت نشد</h3>
+          <p className="text-slate-400 text-xs leading-relaxed">
+            برای سال {toPersianDigits(selectedYear)} ماه {getJalaliMonthName(selectedMonth)} و فیلتر مشخص شده، هنوز هیچ آمار روزانه‌ای ثبت نشده است. لطفاً ابتدا در بخش اول تاریخ دلخواهی را ثبت کنید.
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* Dashboard Summary Statistics Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            
+            {/* Total Office Announced Card */}
+            <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-slate-400 text-[11px] leading-3">مجموع آمار اعلامی اداری</p>
+                <h3 className="font-extrabold text-indigo-400 text-xl font-mono mt-1.5">
+                  {toPersianDigits(aggregates.officeAnnounced)}
+                </h3>
+                <p className="text-[10px] text-slate-500 mt-0.5">پرس غذا در ماه جاری</p>
+              </div>
+              <div className="bg-indigo-500/10 text-indigo-400 p-3 rounded-xl">
+                <Activity className="h-5 w-5" />
+              </div>
+            </div>
+
+            {/* Total Contractor Cooked Card */}
+            <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-slate-400 text-[11px] leading-3">مجموع پخت پیمانکار (مرادی)</p>
+                <h3 className="font-extrabold text-amber-400 text-xl font-mono mt-1.5">
+                  {toPersianDigits(aggregates.contractorCooked)}
+                </h3>
+                <p className="text-[10px] text-slate-500 mt-0.5">دستور پخت: {toPersianDigits(aggregates.cookingInstruction)}</p>
+              </div>
+              <div className="bg-amber-500/10 text-amber-400 p-3 rounded-xl">
+                <Scale className="h-5 w-5" />
+              </div>
+            </div>
+
+            {/* Total Distributed Card */}
+            <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-slate-400 text-[11px] leading-3">مجموع غذای توزیع شده</p>
+                <h3 className="font-extrabold text-emerald-400 text-xl font-mono mt-1.5">
+                  {toPersianDigits(aggregates.totalDistributed)}
+                </h3>
+                <p className="text-[10px] text-slate-500 mt-0.5">رستوران: {toPersianDigits(aggregates.receivedInRestaurant)} | فیش فراموشی: {toPersianDigits(aggregates.forgottenTicket)} | بیرون‌بر: {toPersianDigits(aggregates.takeaways)}</p>
+              </div>
+              <div className="bg-emerald-500/10 text-emerald-400 p-3 rounded-xl">
+                <TrendingUp className="h-5 w-5" />
+              </div>
+            </div>
+
+            {/* Wastage Food Card */}
+            <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-slate-400 text-[11px] leading-3">آمار هدررفت و پرت غذا</p>
+                <h3 className={`font-extrabold text-xl font-mono mt-1.5 ${aggregates.foodWastage > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                  {toPersianDigits(aggregates.foodWastage)}
+                </h3>
+                <p className="text-[10px] text-slate-500 mt-0.5">نرخ بهره‌وری: {toPersianDigits(aggregates.efficiency.toFixed(1))}%</p>
+              </div>
+              <div className={`p-3 rounded-xl ${aggregates.foodWastage > 0 ? 'bg-rose-500/10 text-rose-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
+                <TrendingDown className="h-5 w-5" />
+              </div>
+            </div>
+
+          </div>
+
+          {/* Interactive Charting Panel */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            
+            {/* Chart 1: Daily comparison bar chart */}
+            <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 shadow-sm">
+              <h4 className="font-bold text-slate-100 text-sm mb-4">نمودار مقایسه‌ای آمار اداری، پخت پیمانکار و مصرف واقعی</h4>
+              <div className="h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={chartData}
+                    margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                    <XAxis dataKey="dateLabel" tick={{ fontSize: 10 }} stroke="#475569" />
+                    <YAxis tick={{ fontSize: 10 }} stroke="#475569" />
+                    <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', color: '#f8fafc', direction: 'rtl', textAlign: 'right', fontSize: 12, borderRadius: 8 }} />
+                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+                    <Bar name="آمار اعلامی اداری" dataKey="officeAnnounced" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                    <Bar name="پخت پیمانکار" dataKey="contractorCooked" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                    <Bar name="سامانه خروجی" dataKey="systemOutput" fill="#a855f7" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Chart 2: Consumption Breakdown trend chart */}
+            <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 shadow-sm">
+              <h4 className="font-bold text-slate-100 text-sm mb-4">روند روزانه مصرف رستوران، بیرون‌بر و فیش فراموشی</h4>
+              <div className="h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart
+                    data={chartData}
+                    margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                  >
+                    <defs>
+                      <linearGradient id="colorRest" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                      </linearGradient>
+                      <linearGradient id="colorTake" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.2}/>
+                        <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                    <XAxis dataKey="dateLabel" tick={{ fontSize: 10 }} stroke="#475569" />
+                    <YAxis tick={{ fontSize: 10 }} stroke="#475569" />
+                    <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', color: '#f8fafc', direction: 'rtl', textAlign: 'right', fontSize: 12, borderRadius: 8 }} />
+                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+                    <Area type="monotone" name="دریافت در رستوران" dataKey="receivedInRestaurant" stroke="#10b981" fillOpacity={1} fill="url(#colorRest)" />
+                    <Area type="monotone" name="غذای بیرون‌بر" dataKey="takeaways" stroke="#0ea5e9" fillOpacity={1} fill="url(#colorTake)" />
+                    <Line type="monotone" name="فیش فراموشی" dataKey="forgottenTicket" stroke="#f43f5e" strokeWidth={2} activeDot={{ r: 4 }} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+          </div>
+
+          {/* Complete Month Log List Table */}
+          <div className="bg-[#0f172a] rounded-2xl border border-slate-800 shadow-sm overflow-hidden">
+            <div className="px-6 py-4 bg-slate-900 border-b border-slate-800">
+              <h4 className="font-bold text-slate-100 text-sm">لیست جزئیات آمار روزانه ماه جاری</h4>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-right text-xs sm:text-sm border-collapse">
+                <thead>
+                  <tr className="bg-slate-950/60 text-slate-300 font-bold border-b border-slate-800">
+                    <th className="px-4 py-3">تاریخ (شمسی)</th>
+                    <th className="px-4 py-3">وعده</th>
+                    <th className="px-4 py-3 text-center">ظرفیت کارگاه</th>
+                    <th className="px-4 py-3 text-center">آمار اداری</th>
+                    <th className="px-4 py-3 text-center">دستور پخت</th>
+                    <th className="px-4 py-3 text-center">پخت مرادی</th>
+                    <th className="px-4 py-3 text-center">دریافت رستوران</th>
+                    <th className="px-4 py-3 text-center">فیش فراموشی</th>
+                    <th className="px-4 py-3 text-center">بیرون بر</th>
+                    <th className="px-4 py-3 text-center">خروجی سیستم</th>
+                    <th className="px-4 py-3">یادداشت</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-850">
+                  {filteredLogs
+                    .sort((a, b) => b.date.localeCompare(a.date))
+                    .map((log) => {
+                       const mealName = meals.find((m) => m.id === log.mealId)?.name || log.mealId;
+                       const shamsi = formatToJalali(log.date);
+                       return (
+                        <tr key={log.id} className="hover:bg-slate-900/40 transition-colors">
+                          <td className="px-4 py-3 font-semibold text-slate-200 font-mono">
+                            {toPersianDigits(shamsi)}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="bg-slate-850 text-slate-200 text-[10px] font-bold px-2 py-0.5 rounded-full border border-slate-800">
+                              {mealName}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center font-mono text-slate-400">
+                            {toPersianDigits(log.workshopPersonnel)}
+                          </td>
+                          <td className="px-4 py-3 text-center font-mono font-semibold text-indigo-400">
+                            {toPersianDigits(log.officeAnnounced)}
+                          </td>
+                          <td className="px-4 py-3 text-center font-mono text-slate-400">
+                            {toPersianDigits(log.cookingInstruction)}
+                          </td>
+                          <td className="px-4 py-3 text-center font-mono font-semibold text-amber-400">
+                            {toPersianDigits(log.contractorCooked)}
+                          </td>
+                          <td className="px-4 py-3 text-center font-mono text-emerald-400">
+                            {toPersianDigits(log.receivedInRestaurant)}
+                          </td>
+                          <td className="px-4 py-3 text-center font-mono text-rose-400">
+                            {toPersianDigits(log.forgottenTicket)}
+                          </td>
+                          <td className="px-4 py-3 text-center font-mono text-sky-400">
+                            {toPersianDigits(log.takeaways)}
+                          </td>
+                          <td className="px-4 py-3 text-center font-mono font-bold text-slate-200">
+                            {toPersianDigits(log.systemOutput)}
+                          </td>
+                          <td className="px-4 py-3 max-w-xs truncate text-slate-400 italic" title={log.note}>
+                            {log.note || '-'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+    </div>
+  );
+}
