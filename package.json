@@ -5,10 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "build": "vite build",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --outfile=dist/server.cjs",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "clean": "rm -rf dist server.js boushehr_catering.exe",
+    "lint": "tsc --noEmit",
+    "package:win": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --outfile=dist/server.cjs && pkg dist/server.cjs --targets node18-win-x64 --output boushehr_catering.exe"
+  },
+  "pkg": {
+    "assets": [
+      "dist/**/*"
+    ]
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -30,6 +36,7 @@
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
+    "pkg": "^5.8.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
