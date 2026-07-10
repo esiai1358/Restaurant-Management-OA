@@ -4,13 +4,18 @@
  */
 
 import { toPersianDigits, formatToJalali } from './farsi';
+import { SignatureConfig } from '../types';
 
 /**
  * Exports data to a CSV file with correct UTF-8 BOM for Persian characters.
  */
-export function exportToCSV(filename: string, headers: string[], rows: (string | number)[][]) {
+export function exportToCSV(filename: string, headers: string[], rows: (string | number)[][], companyLogoPresent?: boolean) {
   let csvContent = '\uFEFF'; // UTF-8 BOM for Persian Excel compatibility
   
+  // Add professional company header details
+  csvContent += `"شرکت عمران آذرستان - پروژه ساخت و ساز صنعتی بوشهر"${companyLogoPresent ? ',"(دارای لوگوی اختصاصی شرکت)"' : ''}\n`;
+  csvContent += `"گزارش آماری خروجی رستوران کارگاهی"\n\n`;
+
   // Join headers
   csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(',') + '\n';
   
@@ -40,7 +45,9 @@ export function printToPDF(
   subtitle: string,
   headers: string[],
   rows: (string | number)[][],
-  summaries?: { label: string; value: string | number }[]
+  summaries?: { label: string; value: string | number }[],
+  signatures?: SignatureConfig[],
+  companyLogo?: string
 ) {
   const printWindow = window.open('', '_blank');
   if (!printWindow) {
@@ -269,9 +276,16 @@ export function printToPDF(
 
       <!-- Main Corporate Report Page -->
       <div class="header-container">
-        <div class="company-info">
-          <h1 class="company-name">شرکت عمران آذرستان</h1>
-          <p class="project-name">پروژه ساخت و ساز صنعتی بوشهر</p>
+        <div style="display: flex; align-items: center; gap: 15px;">
+          ${companyLogo ? `
+            <div style="width: 55px; height: 55px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; display: flex; justify-content: center; align-items: center; overflow: hidden; padding: 2px;">
+              <img src="${companyLogo}" style="max-width: 100%; max-height: 100%; object-fit: contain;" referrerPolicy="no-referrer" />
+            </div>
+          ` : ''}
+          <div class="company-info">
+            <h1 class="company-name">شرکت عمران آذرستان</h1>
+            <p class="project-name">پروژه ساخت و ساز صنعتی بوشهر</p>
+          </div>
         </div>
         <div class="report-meta">
           <p>تاریخ گزارش: ${toPersianDigits(todayStr)}</p>
@@ -316,6 +330,20 @@ export function printToPDF(
           `).join('')}
         </tbody>
       </table>
+
+      <!-- Signature Boxes Section -->
+      ${signatures && signatures.length > 0 ? `
+        <div style="margin-top: 50px; margin-bottom: 80px; page-break-inside: avoid;">
+          <div style="display: flex; justify-content: space-around; align-items: flex-start; gap: 20px;">
+            ${signatures.filter(s => s.isVisible).map(s => `
+              <div style="flex: 1; min-width: 150px; max-width: 250px; text-align: center; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 15px; background-color: #f8fafc;">
+                <p style="font-size: 11px; font-weight: 700; color: #475569; margin: 0 0 45px 0;">امضای ${s.title}</p>
+                <p style="font-size: 11px; font-weight: 900; color: #0f172a; margin: 0;">${s.name}</p>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
 
       <!-- Footer Section -->
       <div class="footer-container">

@@ -7,12 +7,17 @@ import React from 'react';
 import { ChefHat, Building2, User, Cpu, Calendar, Shield, Users, Eye } from 'lucide-react';
 import { formatToJalali, toPersianDigits } from '../utils/farsi';
 
+import { AppUser, SystemSettings } from '../types';
+
 interface HeaderProps {
   currentRole: 'admin' | 'supervisor' | 'guest';
-  onRoleChange: (role: 'admin' | 'supervisor' | 'guest') => void;
+  users: AppUser[];
+  currentUserId: string;
+  onUserChange: (id: string) => void;
+  systemSettings?: SystemSettings;
 }
 
-export default function Header({ currentRole, onRoleChange }: HeaderProps) {
+export default function Header({ currentRole, users, currentUserId, onUserChange, systemSettings }: HeaderProps) {
   const todayStr = new Date().toISOString().split('T')[0];
   const shamsiDate = formatToJalali(todayStr, true);
 
@@ -43,17 +48,29 @@ export default function Header({ currentRole, onRoleChange }: HeaderProps) {
   };
 
   const roleStyle = getRoleBadgeStyle();
+  const currentUser = users.find(u => u.id === currentUserId) || users[0];
 
   return (
     <header className="bg-slate-900 text-slate-200 border-b border-slate-800 shadow-xl" id="app-header">
-      <div className="max-w-7xl mx-auto px-4 py-5 sm:px-6 lg:px-8">
+      <div className="max-w-[96rem] mx-auto px-4 py-5 sm:px-6 lg:px-8">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
           
           {/* Logo & Company Identity */}
           <div className="flex items-center gap-4">
-            <div className="bg-emerald-500 text-slate-950 p-3 rounded-xl shadow-md border-2 border-emerald-400 shrink-0">
-              <ChefHat className="h-8 w-8" />
-            </div>
+            {systemSettings?.companyLogo ? (
+              <div className="bg-white p-1 rounded-xl shadow-md border-2 border-slate-700 shrink-0 w-14 h-14 flex items-center justify-center overflow-hidden">
+                <img
+                  src={systemSettings.companyLogo}
+                  alt="لوگوی شرکت"
+                  className="max-w-full max-h-full object-contain"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
+            ) : (
+              <div className="bg-emerald-500 text-slate-950 p-3 rounded-xl shadow-md border-2 border-emerald-400 shrink-0">
+                <ChefHat className="h-8 w-8" />
+              </div>
+            )}
             <div>
               <div className="flex items-center gap-2">
                 <span className="bg-emerald-500/10 text-emerald-400 text-xs font-semibold px-2 py-0.5 rounded-full border border-emerald-500/30">
@@ -77,9 +94,10 @@ export default function Header({ currentRole, onRoleChange }: HeaderProps) {
                 {roleStyle.icon}
               </div>
               <div className="text-right">
-                <p className="text-slate-400 text-[10px] leading-3">نقش و سطح دسترسی کاربر</p>
+                <p className="text-slate-400 text-[10px] leading-3">کاربر فعال جاری</p>
                 <div className="flex items-center gap-1.5 mt-1">
-                  <span className={`text-xs font-bold px-2 py-0.5 rounded-md border ${roleStyle.bg}`}>
+                  <span className="text-xs font-black text-slate-50">{currentUser?.name || 'کاربر سیستم'}</span>
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${roleStyle.bg}`}>
                     {roleStyle.badge}
                   </span>
                 </div>
@@ -88,16 +106,29 @@ export default function Header({ currentRole, onRoleChange }: HeaderProps) {
             </div>
 
             {/* Selector dropdown */}
-            <div className="sm:mr-auto flex flex-col gap-1.5 min-w-[180px]">
-              <label className="text-[10px] text-slate-400 font-semibold">سوئیچ و مدیریت کاربران</label>
+            <div className="sm:mr-auto flex flex-col gap-1.5 min-w-[200px]">
+              <label className="text-[10px] text-slate-400 font-semibold">سوئیچ سریع کاربر فعال</label>
               <select
-                value={currentRole}
-                onChange={(e) => onRoleChange(e.target.value as any)}
+                value={currentUserId}
+                onChange={(e) => {
+                  const targetId = e.target.value;
+                  const targetUser = users.find(u => u.id === targetId);
+                  if (targetUser && targetUser.password) {
+                    const entered = window.prompt(`جهت سوئیچ به کاربر "${targetUser.name}"، کلمه عبور را وارد نمایید:`);
+                    if (entered !== targetUser.password) {
+                      window.alert('خطا: کلمه عبور وارد شده نامعتبر می‌باشد!');
+                      return;
+                    }
+                  }
+                  onUserChange(targetId);
+                }}
                 className="w-full px-3 py-1.5 border border-slate-800 bg-slate-900 text-slate-100 rounded-xl text-xs font-bold focus:ring-2 focus:ring-emerald-500 outline-none cursor-pointer transition-all"
               >
-                <option value="admin" className="bg-slate-900 text-slate-100">آدمین با دسترسی کامل</option>
-                <option value="supervisor" className="bg-slate-900 text-slate-100">سرپرست خدمات (ورود داده/خروجی)</option>
-                <option value="guest" className="bg-slate-900 text-slate-100">مهمان (فقط بازدید آمار)</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id} className="bg-slate-900 text-slate-100 font-sans">
+                    {u.name} ({u.role === 'admin' ? 'آدمین' : u.role === 'supervisor' ? 'سرپرست' : 'مهمان'})
+                  </option>
+                ))}
               </select>
             </div>
           </div>

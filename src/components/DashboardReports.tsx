@@ -4,9 +4,10 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { DailyLog, Meal, CustomField } from '../types';
+import { DailyLog, Meal, CustomField, SystemSettings } from '../types';
 import { formatToJalali, getJalaliMonthName, toPersianDigits } from '../utils/farsi';
-import { printToPDF } from '../utils/exportHelpers';
+import { exportToCSV, printToPDF } from '../utils/exportHelpers';
+import ExportSelectionModal from './ExportSelectionModal';
 import {
   BarChart,
   Bar,
@@ -43,13 +44,19 @@ interface DashboardReportsProps {
   logs: DailyLog[];
   meals: Meal[];
   customFields: CustomField[];
+  systemSettings: SystemSettings;
 }
 
-export default function DashboardReports({ logs, meals, customFields }: DashboardReportsProps) {
+export default function DashboardReports({ logs, meals, customFields, systemSettings }: DashboardReportsProps) {
   // Filters state
   const [selectedYear, setSelectedYear] = useState<number>(1405); // Persian Year (matching Gregorian 2026)
   const [selectedMonth, setSelectedMonth] = useState<number>(4); // تیر (July is roughly month 4 of Solar year)
   const [selectedMealFilter, setSelectedMealFilter] = useState<string>('all'); // 'all' or specific meal id
+  const [chartPeriod, setChartPeriod] = useState<'daily' | 'weekly' | 'monthly' | 'comparison'>('daily');
+
+  // Export selection modal states
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [exportModalType, setExportModalType] = useState<'excel' | 'pdf'>('excel');
 
   // Helper lists for Persian Months
   const JALALI_MONTHS = [
@@ -187,76 +194,252 @@ export default function DashboardReports({ logs, meals, customFields }: Dashboar
       .map(([_, val]) => val);
   }, [filteredLogs]);
 
-  // CSV Exporter for local reporting (highly useful)
-  const exportToCSV = () => {
-    if (filteredLogs.length === 0) {
-      alert('داده‌ای برای خروجی گرفتن وجود ندارد.');
-      return;
-    }
-
-    let csvContent = '\uFEFF'; // UTF-8 BOM for Persian excel alignment
-    csvContent += 'تاریخ,وعده غذایی,آمار اداری,دستور پخت,پخت پیمانکار,دریافت رستوران,فیش فراموشی,بیرون بر,خروجی سیستم,تعداد پرسنل\n';
+  // Aggregate weekly statistics (grouped into Weeks 1-5 of the selected month)
+  const weeklyChartData = useMemo(() => {
+    const weeks: Record<string, {
+      weekLabel: string;
+      officeAnnounced: number;
+      cookingInstruction: number;
+      contractorCooked: number;
+      totalDistributed: number;
+      receptionRate: number;
+    }> = {
+      'w1': { weekLabel: 'هفته اول', officeAnnounced: 0, cookingInstruction: 0, contractorCooked: 0, totalDistributed: 0, receptionRate: 0 },
+      'w2': { weekLabel: 'هفته دوم', officeAnnounced: 0, cookingInstruction: 0, contractorCooked: 0, totalDistributed: 0, receptionRate: 0 },
+      'w3': { weekLabel: 'هفته سوم', officeAnnounced: 0, cookingInstruction: 0, contractorCooked: 0, totalDistributed: 0, receptionRate: 0 },
+      'w4': { weekLabel: 'هفته چهارم', officeAnnounced: 0, cookingInstruction: 0, contractorCooked: 0, totalDistributed: 0, receptionRate: 0 },
+      'w5': { weekLabel: 'هفته پنجم', officeAnnounced: 0, cookingInstruction: 0, contractorCooked: 0, totalDistributed: 0, receptionRate: 0 },
+    };
 
     filteredLogs.forEach((log) => {
-      const mealName = meals.find((m) => m.id === log.mealId)?.name || log.mealId;
+      if (!log.date) return;
       const shamsi = formatToJalali(log.date);
-      csvContent += `${shamsi},${mealName},${log.officeAnnounced},${log.cookingInstruction},${log.contractorCooked},${log.receivedInRestaurant},${log.forgottenTicket},${log.takeaways},${log.systemOutput},${log.workshopPersonnel}\n`;
+      const dayNum = Number(shamsi.split('/')[2]);
+
+      let weekKey = 'w5';
+      if (dayNum <= 7) weekKey = 'w1';
+      else if (dayNum <= 14) weekKey = 'w2';
+      else if (dayNum <= 21) weekKey = 'w3';
+      else if (dayNum <= 28) weekKey = 'w4';
+
+      const totalDist = log.receivedInRestaurant + log.forgottenTicket + log.takeaways;
+      
+      weeks[weekKey].officeAnnounced += log.officeAnnounced;
+      weeks[weekKey].cookingInstruction += log.cookingInstruction;
+      weeks[weekKey].contractorCooked += log.contractorCooked;
+      weeks[weekKey].totalDistributed += totalDist;
     });
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `گزارش_رستوران_${selectedYear}_${selectedMonth}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    return Object.values(weeks).map(w => {
+      const reception = w.officeAnnounced > 0 ? (w.totalDistributed / w.officeAnnounced) * 100 : 0;
+      return {
+        ...w,
+        receptionRate: Math.round(reception)
+      };
+    });
+  }, [filteredLogs]);
+
+  // Aggregate monthly statistics for the selected year
+  const monthlyChartData = useMemo(() => {
+    const monthsData = JALALI_MONTHS.map(m => ({
+      monthLabel: m.name,
+      monthNum: m.num,
+      officeAnnounced: 0,
+      cookingInstruction: 0,
+      contractorCooked: 0,
+      totalDistributed: 0,
+      receptionRate: 0
+    }));
+
+    logs.forEach((log) => {
+      if (!log.date) return;
+      const [y, m, d] = log.date.split('-').map(Number);
+      if (isNaN(y) || isNaN(m) || isNaN(d)) return;
+
+      const g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 335];
+      const gy2 = m > 2 ? y + 1 : y;
+      let g_day_no = 365 * y + Math.floor((gy2 + 3) / 4) - Math.floor((gy2 + 99) / 100) + Math.floor((gy2 + 399) / 400) - 80 + d + g_d_m[m - 1];
+      let jy = 979 + 33 * Math.floor(g_day_no / 12053) + 4 * Math.floor((g_day_no % 12053) / 1461);
+      g_day_no %= 1461;
+      if (g_day_no >= 366) {
+        jy += Math.floor((g_day_no - 1) / 365);
+        g_day_no = (g_day_no - 1) % 365;
+      }
+      let j_day_no = g_day_no + 78;
+      if (j_day_no >= 366) {
+        jy += 1;
+        j_day_no -= 366;
+      }
+      const jm = 1 + Math.floor(j_day_no / 31);
+
+      if (jy === selectedYear) {
+        const targetMonth = monthsData.find(md => md.monthNum === jm);
+        if (targetMonth) {
+          const totalDist = log.receivedInRestaurant + log.forgottenTicket + log.takeaways;
+          targetMonth.officeAnnounced += log.officeAnnounced;
+          targetMonth.cookingInstruction += log.cookingInstruction;
+          targetMonth.contractorCooked += log.contractorCooked;
+          targetMonth.totalDistributed += totalDist;
+        }
+      }
+    });
+
+    return monthsData.map(m => {
+      const reception = m.officeAnnounced > 0 ? (m.totalDistributed / m.officeAnnounced) * 100 : 0;
+      return {
+        ...m,
+        receptionRate: Math.round(reception)
+      };
+    });
+  }, [logs, selectedYear]);
+
+  // Return list of available fields to export
+  const getReportsExportItems = () => {
+    return [
+      { key: 'officeAnnounced', label: 'کل آمار اداری', category: 'اداری' },
+      { key: 'cookingInstruction', label: 'کل دستور پخت', category: 'پیمانکار' },
+      { key: 'contractorCooked', label: 'کل پخت پیمانکار', category: 'پیمانکار' },
+      { key: 'receivedInRestaurant', label: 'دریافت واقعی رستوران (کارت)', category: 'رستوران' },
+      { key: 'forgottenTicket', label: 'دریافت با فیش فراموشی', category: 'رستوران' },
+      { key: 'takeaways', label: 'دریافت غذای بیرون‌بر', category: 'رستوران' },
+      { key: 'systemOutput', label: 'آمار خروجی سامانه', category: 'سیستم' },
+      { key: 'workshopPersonnel', label: 'تعداد پرسنل کارگاه', category: 'ظرفیت' },
+      { key: 'wastage', label: 'میزان پرت غذا', category: 'محاسباتی' },
+    ];
   };
 
-  // Printable PDF Exporter for high-quality reports
-  const exportToPDF = () => {
+  const handleExportCSVClick = () => {
     if (filteredLogs.length === 0) {
       alert('داده‌ای برای خروجی گرفتن وجود ندارد.');
       return;
     }
+    setExportModalType('excel');
+    setIsExportModalOpen(true);
+  };
 
+  const handleExportPDFClick = () => {
+    if (filteredLogs.length === 0) {
+      alert('داده‌ای برای خروجی گرفتن وجود ندارد.');
+      return;
+    }
+    setExportModalType('pdf');
+    setIsExportModalOpen(true);
+  };
+
+  const executeReportsExport = (selectedKeys: string[]) => {
+    if (filteredLogs.length === 0) return;
     const monthName = getJalaliMonthName(selectedMonth);
-    const headers = ['تاریخ', 'وعده', 'آمار اداری', 'دستور پخت', 'پخت پیمانکار', 'دریافت واقعی', 'فیش فراموشی', 'بیرون‌بر', 'خروجی سیستم', 'پرت غذا'];
 
-    const rows = filteredLogs.map((log) => {
-      const mealName = meals.find((m) => m.id === log.mealId)?.name || log.mealId;
-      const shamsi = formatToJalali(log.date);
-      const realConsumption = log.receivedInRestaurant + log.forgottenTicket + log.takeaways;
-      const wastage = log.contractorCooked - realConsumption;
-      
-      return [
-        shamsi,
-        mealName,
-        log.officeAnnounced,
-        log.cookingInstruction,
-        log.contractorCooked,
-        log.receivedInRestaurant,
-        log.forgottenTicket,
-        log.takeaways,
-        log.systemOutput,
-        wastage
-      ];
-    });
+    if (exportModalType === 'excel') {
+      const headers: string[] = ['تاریخ', 'وعده غذایی'];
+      if (selectedKeys.includes('officeAnnounced')) headers.push('آمار اداری');
+      if (selectedKeys.includes('cookingInstruction')) headers.push('دستور پخت');
+      if (selectedKeys.includes('contractorCooked')) headers.push('پخت پیمانکار');
+      if (selectedKeys.includes('receivedInRestaurant')) headers.push('دریافت رستوران');
+      if (selectedKeys.includes('forgottenTicket')) headers.push('فیش فراموشی');
+      if (selectedKeys.includes('takeaways')) headers.push('بیرون‌بر');
+      if (selectedKeys.includes('systemOutput')) headers.push('خروجی سیستم');
+      if (selectedKeys.includes('workshopPersonnel')) headers.push('تعداد پرسنل');
+      if (selectedKeys.includes('wastage')) headers.push('پرت غذا');
 
-    const summaries = [
-      { label: 'کل آمار اداری ماه', value: aggregates.officeAnnounced },
-      { label: 'کل غذای پخته شده', value: aggregates.contractorCooked },
-      { label: 'کل غذای توزیع شده', value: aggregates.totalDistributed },
-      { label: 'کل پرت غذای ماه (پرس)', value: aggregates.foodWastage },
-    ];
+      let csvContent = '\uFEFF'; // UTF-8 BOM for Persian excel alignment
+      csvContent += `"شرکت عمران آذرستان - پروژه ساخت و ساز صنعتی بوشهر"${systemSettings?.companyLogo ? ',"(دارای لوگوی اختصاصی شرکت)"' : ''}\n`;
+      csvContent += `"گزارش عملکرد و مغایرت تجمعی ماهانه رستوران کارگاهی"\n\n`;
+      csvContent += headers.join(',') + '\n';
 
-    printToPDF(
-      `گزارش عملکرد و مغایرت تجمعی ماهانه رستوران کارگاهی بوشهر`,
-      `دوره گزارش: ${monthName} ماه سال ${selectedYear} | تعداد کل رکوردها: ${aggregates.count} مورد`,
-      headers,
-      rows,
-      summaries
-    );
+      filteredLogs.forEach((log) => {
+        const mealName = meals.find((m) => m.id === log.mealId)?.name || log.mealId;
+        const shamsi = formatToJalali(log.date);
+        
+        const rowValues: string[] = [shamsi, mealName];
+        if (selectedKeys.includes('officeAnnounced')) rowValues.push(String(log.officeAnnounced));
+        if (selectedKeys.includes('cookingInstruction')) rowValues.push(String(log.cookingInstruction));
+        if (selectedKeys.includes('contractorCooked')) rowValues.push(String(log.contractorCooked));
+        if (selectedKeys.includes('receivedInRestaurant')) rowValues.push(String(log.receivedInRestaurant));
+        if (selectedKeys.includes('forgottenTicket')) rowValues.push(String(log.forgottenTicket));
+        if (selectedKeys.includes('takeaways')) rowValues.push(String(log.takeaways));
+        if (selectedKeys.includes('systemOutput')) rowValues.push(String(log.systemOutput));
+        if (selectedKeys.includes('workshopPersonnel')) rowValues.push(String(log.workshopPersonnel));
+        if (selectedKeys.includes('wastage')) {
+          const realConsumption = log.receivedInRestaurant + log.forgottenTicket + log.takeaways;
+          const wastage = log.contractorCooked - realConsumption;
+          rowValues.push(String(wastage));
+        }
+
+        csvContent += rowValues.join(',') + '\n';
+      });
+
+      if (systemSettings && systemSettings.signatures) {
+        csvContent += '\n'; // blank line
+        systemSettings.signatures.filter(s => s.isVisible).forEach(s => {
+          csvContent += `امضای ${s.title},${s.name}\n`;
+        });
+      }
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `گزارش_رستوران_${selectedYear}_${selectedMonth}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else {
+      // PDF Dynamic
+      const headers = ['تاریخ', 'وعده'];
+      if (selectedKeys.includes('officeAnnounced')) headers.push('آمار اداری');
+      if (selectedKeys.includes('cookingInstruction')) headers.push('دستور پخت');
+      if (selectedKeys.includes('contractorCooked')) headers.push('پخت پیمانکار');
+      if (selectedKeys.includes('receivedInRestaurant')) headers.push('دریافت واقعی');
+      if (selectedKeys.includes('forgottenTicket')) headers.push('فیش فراموشی');
+      if (selectedKeys.includes('takeaways')) headers.push('بیرون‌بر');
+      if (selectedKeys.includes('systemOutput')) headers.push('خروجی سیستم');
+      if (selectedKeys.includes('wastage')) headers.push('پرت غذا');
+
+      const rows = filteredLogs.map((log) => {
+        const mealName = meals.find((m) => m.id === log.mealId)?.name || log.mealId;
+        const shamsi = formatToJalali(log.date);
+        
+        const rowValues: (string | number)[] = [shamsi, mealName];
+        if (selectedKeys.includes('officeAnnounced')) rowValues.push(log.officeAnnounced);
+        if (selectedKeys.includes('cookingInstruction')) rowValues.push(log.cookingInstruction);
+        if (selectedKeys.includes('contractorCooked')) rowValues.push(log.contractorCooked);
+        if (selectedKeys.includes('receivedInRestaurant')) rowValues.push(log.receivedInRestaurant);
+        if (selectedKeys.includes('forgottenTicket')) rowValues.push(log.forgottenTicket);
+        if (selectedKeys.includes('takeaways')) rowValues.push(log.takeaways);
+        if (selectedKeys.includes('systemOutput')) rowValues.push(log.systemOutput);
+        if (selectedKeys.includes('wastage')) {
+          const realConsumption = log.receivedInRestaurant + log.forgottenTicket + log.takeaways;
+          const wastage = log.contractorCooked - realConsumption;
+          rowValues.push(wastage);
+        }
+        return rowValues;
+      });
+
+      const summaries = [];
+      if (selectedKeys.includes('officeAnnounced')) {
+        summaries.push({ label: 'کل آمار اداری دوره', value: aggregates.officeAnnounced });
+      }
+      if (selectedKeys.includes('contractorCooked')) {
+        summaries.push({ label: 'کل غذای پخته شده', value: aggregates.contractorCooked });
+      }
+      if (selectedKeys.includes('receivedInRestaurant') || selectedKeys.includes('forgottenTicket') || selectedKeys.includes('takeaways')) {
+        summaries.push({ label: 'کل غذای توزیع شده', value: aggregates.totalDistributed });
+      }
+      if (selectedKeys.includes('wastage')) {
+        summaries.push({ label: 'کل پرت غذای دوره (پرس)', value: aggregates.foodWastage });
+      }
+
+      printToPDF(
+        `گزارش عملکرد و مغایرت تجمعی ماهانه رستوران کارگاهی بوشهر`,
+        `دوره گزارش: ${monthName} ماه سال ${selectedYear} | تعداد کل رکوردها: ${aggregates.count} مورد`,
+        headers,
+        rows,
+        summaries,
+        systemSettings.signatures,
+        systemSettings.companyLogo
+      );
+    }
   };
 
   return (
@@ -272,7 +455,7 @@ export default function DashboardReports({ logs, meals, customFields }: Dashboar
           
           <div className="flex flex-wrap items-center gap-3 self-end md:self-auto">
             <button
-              onClick={exportToCSV}
+              onClick={handleExportCSVClick}
               className="bg-emerald-600 hover:bg-emerald-700 text-slate-950 font-extrabold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-sm shadow-emerald-600/10 transition-all"
             >
               <FileSpreadsheet className="h-4 w-4" />
@@ -280,7 +463,7 @@ export default function DashboardReports({ logs, meals, customFields }: Dashboar
             </button>
 
             <button
-              onClick={exportToPDF}
+              onClick={handleExportPDFClick}
               className="bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 font-extrabold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-sm transition-all"
             >
               <Printer className="h-4 w-4 text-amber-400" />
@@ -417,62 +600,295 @@ export default function DashboardReports({ logs, meals, customFields }: Dashboar
 
           </div>
 
-          {/* Interactive Charting Panel */}
+          {/* Advanced Period Switcher and Popularity Analysis */}
+          <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h4 className="font-bold text-slate-100 text-sm">سطح تحلیل زمانی و نمودارهای مقایسه‌ای استقبال</h4>
+              <p className="text-[10px] text-slate-400 mt-1">بازه زمانی مورد نظر جهت ترسیم آمار و سنجش درصد استقبال از رستوران را انتخاب کنید</p>
+            </div>
+            
+            <div className="flex bg-slate-950/80 p-1 rounded-xl border border-slate-800 self-start sm:self-auto gap-1">
+              <button
+                onClick={() => setChartPeriod('daily')}
+                className={`px-4 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-all ${
+                  chartPeriod === 'daily'
+                    ? 'bg-emerald-500 text-slate-950 shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                آمار روزانه
+              </button>
+              <button
+                onClick={() => setChartPeriod('weekly')}
+                className={`px-4 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-all ${
+                  chartPeriod === 'weekly'
+                    ? 'bg-emerald-500 text-slate-950 shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                آمار هفتگی تجمعی
+              </button>
+              <button
+                onClick={() => setChartPeriod('monthly')}
+                className={`px-4 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-all ${
+                  chartPeriod === 'monthly'
+                    ? 'bg-emerald-500 text-slate-950 shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                آمار سالانه ماه به ماه
+              </button>
+              <button
+                onClick={() => setChartPeriod('comparison')}
+                className={`px-4 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-all ${
+                  chartPeriod === 'comparison'
+                    ? 'bg-emerald-500 text-slate-950 shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                مقایسه حرفه‌ای استقبال
+              </button>
+            </div>
+          </div>
+
+          {/* Interactive Charting Panel based on selection */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             
-            {/* Chart 1: Daily comparison bar chart */}
-            <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 shadow-sm">
-              <h4 className="font-bold text-slate-100 text-sm mb-4">نمودار مقایسه‌ای آمار اداری، پخت پیمانکار و مصرف واقعی</h4>
-              <div className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={chartData}
-                    margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                    <XAxis dataKey="dateLabel" tick={{ fontSize: 10 }} stroke="#475569" />
-                    <YAxis tick={{ fontSize: 10 }} stroke="#475569" />
-                    <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', color: '#f8fafc', direction: 'rtl', textAlign: 'right', fontSize: 12, borderRadius: 8 }} />
-                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
-                    <Bar name="آمار اعلامی اداری" dataKey="officeAnnounced" fill="#6366f1" radius={[4, 4, 0, 0]} />
-                    <Bar name="پخت پیمانکار" dataKey="contractorCooked" fill="#f59e0b" radius={[4, 4, 0, 0]} />
-                    <Bar name="سامانه خروجی" dataKey="systemOutput" fill="#a855f7" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
+            {/* DAILY CHARTS */}
+            {chartPeriod === 'daily' && (
+              <>
+                {/* Chart 1: Daily comparison bar chart */}
+                <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 shadow-sm">
+                  <h4 className="font-bold text-slate-100 text-xs sm:text-sm mb-4 flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-indigo-500"></span>
+                    نمودار مقایسه‌ای آمار اداری، پخت پیمانکار و مصرف واقعی (روزانه)
+                  </h4>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={chartData}
+                        margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="dateLabel" tick={{ fontSize: 10 }} stroke="#475569" />
+                        <YAxis tick={{ fontSize: 10 }} stroke="#475569" />
+                        <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', color: '#f8fafc', direction: 'rtl', textAlign: 'right', fontSize: 12, borderRadius: 8 }} />
+                        <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+                        <Bar name="آمار اعلامی اداری" dataKey="officeAnnounced" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                        <Bar name="پخت پیمانکار" dataKey="contractorCooked" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                        <Bar name="سامانه خروجی" dataKey="systemOutput" fill="#a855f7" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
 
-            {/* Chart 2: Consumption Breakdown trend chart */}
-            <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 shadow-sm">
-              <h4 className="font-bold text-slate-100 text-sm mb-4">روند روزانه مصرف رستوران، بیرون‌بر و فیش فراموشی</h4>
-              <div className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart
-                    data={chartData}
-                    margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
-                  >
-                    <defs>
-                      <linearGradient id="colorRest" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
-                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                      </linearGradient>
-                      <linearGradient id="colorTake" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.2}/>
-                        <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                    <XAxis dataKey="dateLabel" tick={{ fontSize: 10 }} stroke="#475569" />
-                    <YAxis tick={{ fontSize: 10 }} stroke="#475569" />
-                    <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', color: '#f8fafc', direction: 'rtl', textAlign: 'right', fontSize: 12, borderRadius: 8 }} />
-                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
-                    <Area type="monotone" name="دریافت در رستوران" dataKey="receivedInRestaurant" stroke="#10b981" fillOpacity={1} fill="url(#colorRest)" />
-                    <Area type="monotone" name="غذای بیرون‌بر" dataKey="takeaways" stroke="#0ea5e9" fillOpacity={1} fill="url(#colorTake)" />
-                    <Line type="monotone" name="فیش فراموشی" dataKey="forgottenTicket" stroke="#f43f5e" strokeWidth={2} activeDot={{ r: 4 }} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
+                {/* Chart 2: Consumption Breakdown trend chart */}
+                <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 shadow-sm">
+                  <h4 className="font-bold text-slate-100 text-xs sm:text-sm mb-4 flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
+                    روند روزانه مصرف واقعی رستوران، بیرون‌بر و فیش فراموشی
+                  </h4>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart
+                        data={chartData}
+                        margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                      >
+                        <defs>
+                          <linearGradient id="colorRest" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
+                            <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                          </linearGradient>
+                          <linearGradient id="colorTake" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.2}/>
+                            <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="dateLabel" tick={{ fontSize: 10 }} stroke="#475569" />
+                        <YAxis tick={{ fontSize: 10 }} stroke="#475569" />
+                        <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', color: '#f8fafc', direction: 'rtl', textAlign: 'right', fontSize: 12, borderRadius: 8 }} />
+                        <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+                        <Area type="monotone" name="دریافت در رستوران" dataKey="receivedInRestaurant" stroke="#10b981" fillOpacity={1} fill="url(#colorRest)" />
+                        <Area type="monotone" name="غذای بیرون‌بر" dataKey="takeaways" stroke="#0ea5e9" fillOpacity={1} fill="url(#colorTake)" />
+                        <Line type="monotone" name="فیش فراموشی" dataKey="forgottenTicket" stroke="#f43f5e" strokeWidth={2} activeDot={{ r: 4 }} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* WEEKLY CHARTS */}
+            {chartPeriod === 'weekly' && (
+              <>
+                {/* Chart 1: Weekly comparisons */}
+                <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 shadow-sm">
+                  <h4 className="font-bold text-slate-100 text-xs sm:text-sm mb-4 flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-indigo-500"></span>
+                    مقایسه تجمعی هفتگی آمار اداری در مقابل توزیع واقعی غذا
+                  </h4>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={weeklyChartData}
+                        margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="weekLabel" stroke="#475569" tick={{ fontSize: 11 }} />
+                        <YAxis stroke="#475569" tick={{ fontSize: 11 }} />
+                        <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', color: '#f8fafc', direction: 'rtl', textAlign: 'right', fontSize: 12, borderRadius: 8 }} />
+                        <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+                        <Bar name="آمار کل ابلاغی اداری" dataKey="officeAnnounced" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                        <Bar name="کل پخت پیمانکار" dataKey="contractorCooked" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                        <Bar name="کل غذای توزیع شده واقعی" dataKey="totalDistributed" fill="#10b981" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Chart 2: Weekly popularity / reception trend */}
+                <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 shadow-sm">
+                  <h4 className="font-bold text-slate-100 text-xs sm:text-sm mb-4 flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
+                    روند درصد استقبال و مصرف کل رستوران نسبت به آمار اداری (هفتگی)
+                  </h4>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart
+                        data={weeklyChartData}
+                        margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                      >
+                        <defs>
+                          <linearGradient id="colorWeeklyRec" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.25}/>
+                            <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="weekLabel" stroke="#475569" tick={{ fontSize: 11 }} />
+                        <YAxis stroke="#475569" tick={{ fontSize: 11 }} domain={[0, 100]} unit="%" />
+                        <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', color: '#f8fafc', direction: 'rtl', textAlign: 'right', fontSize: 12, borderRadius: 8 }} />
+                        <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+                        <Area type="monotone" name="درصد استقبال پرسنل" dataKey="receptionRate" stroke="#10b981" fillOpacity={1} fill="url(#colorWeeklyRec)" strokeWidth={3} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* MONTHLY CHARTS */}
+            {chartPeriod === 'monthly' && (
+              <>
+                {/* Chart 1: Monthly comparisons */}
+                <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 shadow-sm">
+                  <h4 className="font-bold text-slate-100 text-xs sm:text-sm mb-4 flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-indigo-500"></span>
+                    مقایسه ماه به ماه سال {toPersianDigits(selectedYear)} (آمار اداری، پخت و توزیع)
+                  </h4>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={monthlyChartData}
+                        margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="monthLabel" stroke="#475569" tick={{ fontSize: 10 }} />
+                        <YAxis stroke="#475569" tick={{ fontSize: 10 }} />
+                        <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', color: '#f8fafc', direction: 'rtl', textAlign: 'right', fontSize: 12, borderRadius: 8 }} />
+                        <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+                        <Bar name="کل آمار اداری" dataKey="officeAnnounced" fill="#6366f1" radius={[3, 3, 0, 0]} />
+                        <Bar name="کل پخت پیمانکار" dataKey="contractorCooked" fill="#f59e0b" radius={[3, 3, 0, 0]} />
+                        <Bar name="کل مصرف واقعی" dataKey="totalDistributed" fill="#10b981" radius={[3, 3, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Chart 2: Monthly Popularity trend */}
+                <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 shadow-sm">
+                  <h4 className="font-bold text-slate-100 text-xs sm:text-sm mb-4 flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-purple-500"></span>
+                    نوسانات میزان استقبال پرسنل از کترینگ در ماه‌های سال جاری
+                  </h4>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart
+                        data={monthlyChartData}
+                        margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                      >
+                        <defs>
+                          <linearGradient id="colorMonthlyRec" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.25}/>
+                            <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="monthLabel" stroke="#475569" tick={{ fontSize: 10 }} />
+                        <YAxis stroke="#475569" tick={{ fontSize: 10 }} domain={[0, 100]} unit="%" />
+                        <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', color: '#f8fafc', direction: 'rtl', textAlign: 'right', fontSize: 12, borderRadius: 8 }} />
+                        <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+                        <Area type="monotone" name="میزان استقبال عمومی" dataKey="receptionRate" stroke="#8b5cf6" fillOpacity={1} fill="url(#colorMonthlyRec)" strokeWidth={3} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* COMPARATIVE POPULARITY */}
+            {chartPeriod === 'comparison' && (
+              <>
+                {/* Comparison chart 1: Weekly popularity reception comparison */}
+                <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 shadow-sm">
+                  <h4 className="font-bold text-slate-100 text-xs sm:text-sm mb-4 flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
+                    تحلیل مقایسه‌ای استقبال هفتگی از رستوران کارگاه (درصد)
+                  </h4>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart
+                        data={weeklyChartData}
+                        margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="weekLabel" stroke="#475569" tick={{ fontSize: 11 }} />
+                        <YAxis stroke="#475569" tick={{ fontSize: 11 }} domain={[0, 100]} unit="%" />
+                        <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', color: '#f8fafc', direction: 'rtl', textAlign: 'right', fontSize: 12, borderRadius: 8 }} />
+                        <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+                        <Line type="monotone" name="درصد استقبال پرسنل" dataKey="receptionRate" stroke="#10b981" strokeWidth={3} dot={{ r: 5 }} activeDot={{ r: 8 }} />
+                        <Line type="monotone" name="روند ایده آل مصرف" dataKey="officeAnnounced" stroke="#475569" strokeDasharray="5 5" />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Comparison chart 2: Monthly Popularity vs. wastage */}
+                <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-5 shadow-sm">
+                  <h4 className="font-bold text-slate-100 text-xs sm:text-sm mb-4 flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-rose-500"></span>
+                    رابطه مغایرت و استقبال ماهانه (استقبال بالاتر = مغایرت و پرت کمتر)
+                  </h4>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={monthlyChartData}
+                        margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="monthLabel" stroke="#475569" tick={{ fontSize: 10 }} />
+                        <YAxis stroke="#475569" tick={{ fontSize: 10 }} />
+                        <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', color: '#f8fafc', direction: 'rtl', textAlign: 'right', fontSize: 12, borderRadius: 8 }} />
+                        <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+                        <Bar name="کل مصرف واقعی پرسنل (حجم توزیع)" dataKey="totalDistributed" fill="#10b981" radius={[3, 3, 0, 0]} />
+                        <Bar name="کل پخت انجام شده (پیمانکار)" dataKey="contractorCooked" fill="#f59e0b" radius={[3, 3, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </>
+            )}
 
           </div>
 
@@ -552,6 +968,15 @@ export default function DashboardReports({ logs, meals, customFields }: Dashboar
         </>
       )}
 
+      <ExportSelectionModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        onConfirm={executeReportsExport}
+        availableItems={getReportsExportItems()}
+        title={exportModalType === 'excel' ? 'انتخاب آیتم‌های آماری برای خروجی اکسل' : 'انتخاب آیتم‌های آماری برای خروجی PDF'}
+        subtitle="لطفاً آیتم‌های آماری مورد نظر خود را جهت قرارگیری در فایل خروجی تیک بزنید."
+        exportType={exportModalType}
+      />
     </div>
   );
 }

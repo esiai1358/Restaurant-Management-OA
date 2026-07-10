@@ -49,3 +49,36 @@ export interface DailyLog {
   note?: string;
   updatedAt: string;
 }
+
+export interface AppUser {
+  id: string;
+  name: string;
+  role: 'admin' | 'supervisor' | 'guest';
+  createdAt: string;
+  password?: string; // Optional password for users, especially admin
+}
+
+export interface SignatureConfig {
+  id: string;
+  title: string; // e.g. "سرپرست خدمات"
+  name: string;  // e.g. "مهندس رضایی"
+  isVisible: boolean;
+}
+
+export interface SystemSettings {
+  contractorName: string;
+  supervisorName: string;
+  signatures: SignatureConfig[];
+  companyLogo?: string; // Base64 representation of the manually uploaded company logo
+}
+
+export interface AuditLog {
+  id: string;
+  timestamp: string; // Shamsi Date and Time (e.g. ۱۴۰۵/۰۴/۱۸ ۱۵:۳۰)
+  userId: string;
+  userName: string;
+  userRole: string;
+  action: string; // e.g. "ورود", "خروج", "ثبت داده", "ویرایش داده", "تغییر تنظیمات"
+  details: string; // Descriptive details
+}
+

@@ -9,3 +9,19 @@
 body {
   font-family: var(--font-sans);
 }
+
+/* Center-align data inside text boxes, selects, and textareas */
+input[type="text"],
+input[type="number"],
+input[type="email"],
+input[type="password"],
+input[type="tel"],
+input[type="url"],
+input[type="date"],
+input[type="time"],
+input:not([type]),
+textarea,
+select {
+  text-align: center !important;
+}
+

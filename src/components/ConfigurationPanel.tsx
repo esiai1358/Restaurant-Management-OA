@@ -4,9 +4,9 @@
  */
 
 import React, { useState } from 'react';
-import { Meal, WeeklyMenu, DayOfWeek, CustomField } from '../types';
+import { Meal, WeeklyMenu, DayOfWeek, CustomField, SystemSettings, SignatureConfig } from '../types';
 import { DAYS_ORDERED, getDayNameInPersian, toPersianDigits } from '../utils/farsi';
-import { Plus, Trash2, Edit2, Check, Clock, Save, Coffee, Settings2, PlusCircle, AlertCircle } from 'lucide-react';
+import { Plus, Trash2, Edit2, Check, Clock, Save, Coffee, Settings2, PlusCircle, AlertCircle, UserCheck, Shield, ToggleLeft, ToggleRight, FileText, Upload } from 'lucide-react';
 
 interface ConfigurationPanelProps {
   meals: Meal[];
@@ -16,6 +16,8 @@ interface ConfigurationPanelProps {
   customFields: CustomField[];
   setCustomFields: React.Dispatch<React.SetStateAction<CustomField[]>>;
   currentRole?: 'admin' | 'supervisor' | 'guest';
+  systemSettings: SystemSettings;
+  onUpdateSystemSettings: (newSettings: SystemSettings, detail: string) => void;
 }
 
 export default function ConfigurationPanel({
@@ -26,6 +28,8 @@ export default function ConfigurationPanel({
   customFields,
   setCustomFields,
   currentRole = 'admin',
+  systemSettings,
+  onUpdateSystemSettings,
 }: ConfigurationPanelProps) {
   // Tabs: 0 = Weekly Menu, 1 = Meals, 2 = Custom Fields
   const [activeSubTab, setActiveSubTab] = useState<number>(0);
@@ -45,7 +49,108 @@ export default function ConfigurationPanel({
   const [editingMenuId, setEditingMenuId] = useState<string | null>(null);
   const [editingFoodName, setEditingFoodName] = useState('');
 
+  // Signature States
+  const [newSigTitle, setNewSigTitle] = useState('');
+  const [newSigName, setNewSigName] = useState('');
+
   const isReadOnly = currentRole !== 'admin';
+
+  const handleUpdateContractorName = (name: string) => {
+    const updatedSigs = systemSettings.signatures.map(sig => 
+      sig.id === 'sig_2' || sig.title === 'پیمانکار رستوران' ? { ...sig, name } : sig
+    );
+    onUpdateSystemSettings({
+      ...systemSettings,
+      contractorName: name,
+      signatures: updatedSigs
+    }, `تغییر نام پیمانکار به: ${name}`);
+  };
+
+  const handleUpdateSupervisorName = (name: string) => {
+    const updatedSigs = systemSettings.signatures.map(sig => 
+      sig.id === 'sig_1' || sig.title === 'سرپرست خدمات' ? { ...sig, name } : sig
+    );
+    onUpdateSystemSettings({
+      ...systemSettings,
+      supervisorName: name,
+      signatures: updatedSigs
+    }, `تغییر نام سرپرست خدمات به: ${name}`);
+  };
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isReadOnly) return;
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Check size limit (500KB)
+    if (file.size > 500 * 1024) {
+      alert('خطا: حجم لوگو نباید بیشتر از ۵۰۰ کیلوبایت باشد!');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64String = event.target?.result as string;
+      onUpdateSystemSettings({
+        ...systemSettings,
+        companyLogo: base64String
+      }, 'لوگوی جدید شرکت به صورت دستی آپلود و در سیستم درج گردید.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveLogo = () => {
+    if (isReadOnly) return;
+    onUpdateSystemSettings({
+      ...systemSettings,
+      companyLogo: undefined
+    }, 'لوگوی شرکت از سیستم حذف گردید و به حالت پیش‌فرض بازگشت.');
+  };
+
+  const handleToggleSignatureVisibility = (id: string) => {
+    const updatedSigs = systemSettings.signatures.map(sig => 
+      sig.id === id ? { ...sig, isVisible: !sig.isVisible } : sig
+    );
+    const targetSig = systemSettings.signatures.find(s => s.id === id);
+    onUpdateSystemSettings({
+      ...systemSettings,
+      signatures: updatedSigs
+    }, `تغییر وضعیت نمایش امضای ${targetSig?.title} به ${!targetSig?.isVisible ? 'نمایان' : 'مخفی'}`);
+  };
+
+  const handleDeleteSignature = (id: string) => {
+    const targetSig = systemSettings.signatures.find(s => s.id === id);
+    if (!targetSig) return;
+    if (id === 'sig_1' || id === 'sig_2' || ['سرپرست خدمات', 'پیمانکار رستوران'].includes(targetSig.title)) {
+      alert('باکس‌های امضای پیش‌فرض (سرپرست خدمات و پیمانکار) قابل حذف نیستند اما می‌توانید آن‌ها را غیرفعال کنید.');
+      return;
+    }
+    const updatedSigs = systemSettings.signatures.filter(sig => sig.id !== id);
+    onUpdateSystemSettings({
+      ...systemSettings,
+      signatures: updatedSigs
+    }, `حذف باکس امضای ${targetSig.title}`);
+  };
+
+  const handleAddSignature = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSigTitle.trim() || !newSigName.trim()) return;
+
+    const newSig: SignatureConfig = {
+      id: `sig_${Date.now()}`,
+      title: newSigTitle.trim(),
+      name: newSigName.trim(),
+      isVisible: true
+    };
+
+    onUpdateSystemSettings({
+      ...systemSettings,
+      signatures: [...systemSettings.signatures, newSig]
+    }, `افزودن باکس امضای جدید: ${newSig.title} (${newSig.name})`);
+
+    setNewSigTitle('');
+    setNewSigName('');
+  };
 
   // Add new meal
   const handleAddMeal = (e: React.FormEvent) => {
@@ -181,6 +286,16 @@ export default function ConfigurationPanel({
             }`}
           >
             افزودن پارامتر ورودی جدید
+          </button>
+          <button
+            onClick={() => setActiveSubTab(3)}
+            className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              activeSubTab === 3
+                ? 'bg-slate-800 text-emerald-400 border border-slate-700 shadow-sm'
+                : 'text-slate-400 hover:text-slate-100'
+            }`}
+          >
+            تنظیمات قرارداد و امضاها
           </button>
         </div>
       </div>
@@ -489,6 +604,223 @@ export default function ConfigurationPanel({
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Tab 3: Contract settings and signature boxes */}
+        {activeSubTab === 3 && (
+          <div className="space-y-6" id="signatures-settings-tab">
+            
+            {/* Contractor & Supervisor Information Card */}
+            <div className="bg-[#111a2e] border border-slate-800 rounded-2xl p-6 shadow-sm">
+              <h3 className="font-bold text-slate-100 text-sm mb-4 flex items-center gap-2">
+                <Shield className="h-4 w-4 text-emerald-500" />
+                تعریف اطلاعات پایه قرارداد پروژه
+              </h3>
+              
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div>
+                  <label className="block text-slate-300 text-xs font-semibold mb-2">نام پیمانکار محترم رستوران</label>
+                  <input
+                    type="text"
+                    value={systemSettings.contractorName}
+                    onChange={(e) => handleUpdateContractorName(e.target.value)}
+                    disabled={isReadOnly}
+                    placeholder="مثال: شرکت کترینگ خلیج فارس"
+                    className="w-full px-3 py-2 border border-slate-850 bg-slate-950 text-slate-100 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">نام شخص حقوقی یا حقیقی طرف قرارداد که غذا را طبخ و تحویل می‌نماید.</p>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 text-xs font-semibold mb-2">نام سرپرست خدمات کارگاه</label>
+                  <input
+                    type="text"
+                    value={systemSettings.supervisorName}
+                    onChange={(e) => handleUpdateSupervisorName(e.target.value)}
+                    disabled={isReadOnly}
+                    placeholder="مثال: مهندس رضوانی"
+                    className="w-full px-3 py-2 border border-slate-850 bg-slate-950 text-slate-100 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">نام ناظر مقیم کارفرما که آمار روزانه را تایید نهایی می‌کند.</p>
+                </div>
+
+                <div className="lg:border-r lg:border-slate-800/40 lg:pr-6">
+                  <label className="block text-slate-300 text-xs font-semibold mb-2">لوگوی اختصاصی شرکت</label>
+                  
+                  {systemSettings.companyLogo ? (
+                    <div className="flex flex-col items-center gap-3 bg-slate-950 p-4 rounded-xl border border-slate-850">
+                      <div className="w-24 h-16 bg-white p-1.5 rounded-lg flex items-center justify-center overflow-hidden">
+                        <img
+                          src={systemSettings.companyLogo}
+                          alt="Company Logo Preview"
+                          className="max-w-full max-h-full object-contain"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                      {!isReadOnly ? (
+                        <button
+                          type="button"
+                          onClick={handleRemoveLogo}
+                          className="px-3 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-[11px] font-bold rounded-lg border border-rose-500/20 cursor-pointer transition-all flex items-center gap-1"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span>حذف لوگو</span>
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-slate-500 font-bold">نمای کلی لوگو</span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-800 hover:border-slate-700 bg-slate-950/40 p-4 rounded-xl h-24 transition-all relative">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleLogoUpload}
+                        disabled={isReadOnly}
+                        className="absolute inset-0 opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                        id="logo-file-input"
+                      />
+                      <Upload className="h-5 w-5 text-slate-500 mb-1" />
+                      <span className="text-[10px] text-slate-400 font-bold">آپلود دستی لوگو (PNG, JPG)</span>
+                      <span className="text-[8px] text-slate-500">حداکثر حجم مجاز: ۵۰۰ کیلوبایت</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Signature Management Section */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              
+              {/* Add New Signature Form */}
+              <div className="bg-slate-950/40 p-5 rounded-2xl border border-slate-800">
+                <h3 className="font-bold text-slate-100 text-xs sm:text-sm mb-4 flex items-center gap-1.5">
+                  <PlusCircle className="h-4 w-4 text-emerald-500" />
+                  تعریف باکس امضای جدید
+                </h3>
+
+                <form onSubmit={handleAddSignature} className="space-y-4">
+                  <div>
+                    <label className="block text-slate-300 text-xs font-semibold mb-1.5">سمت / عنوان امضا کننده</label>
+                    <input
+                      type="text"
+                      value={newSigTitle}
+                      onChange={(e) => setNewSigTitle(e.target.value)}
+                      disabled={isReadOnly}
+                      placeholder="مثال: سرپرست کارگاه"
+                      className="w-full px-3 py-2 border border-slate-800 bg-slate-950 text-slate-100 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 text-xs font-semibold mb-1.5">نام و نام خانوادگی امضا کننده</label>
+                    <input
+                      type="text"
+                      value={newSigName}
+                      onChange={(e) => setNewSigName(e.target.value)}
+                      disabled={isReadOnly}
+                      placeholder="مثال: مهندس حسینی"
+                      className="w-full px-3 py-2 border border-slate-800 bg-slate-950 text-slate-100 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+                      required
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isReadOnly}
+                    className="w-full bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 disabled:opacity-50 text-slate-950 font-extrabold text-xs py-2.5 rounded-xl transition-all shadow-md shadow-emerald-500/10 cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span>افزودن باکس امضا</span>
+                  </button>
+                </form>
+              </div>
+
+              {/* Existing Signatures List */}
+              <div className="lg:col-span-2 space-y-4">
+                <h4 className="font-bold text-slate-100 text-xs sm:text-sm mb-1">باکس‌های امضا جهت درج در پایین گزارشات</h4>
+                <p className="text-[11px] text-slate-400">باکس‌های فعال ذیل، به ترتیب در انتهای فایل‌های خروجی PDF و اکسل به عنوان محل امضا چاپ خواهند شد.</p>
+                
+                <div className="space-y-3">
+                  {systemSettings.signatures.map((sig) => {
+                    const isDefault = ['sig_1', 'sig_2'].includes(sig.id) || ['سرپرست خدمات', 'پیمانکار رستوران'].includes(sig.title);
+                    return (
+                      <div
+                        key={sig.id}
+                        className={`p-4 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                          sig.isVisible
+                            ? 'bg-slate-900/60 border-slate-800'
+                            : 'bg-slate-950/20 border-slate-900 opacity-60'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`p-2 rounded-lg bg-slate-950 text-slate-400 border border-slate-850 shrink-0`}>
+                            <UserCheck className="h-4 w-4 text-emerald-500" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-100 text-xs sm:text-sm">
+                                {sig.title}
+                              </span>
+                              {isDefault && (
+                                <span className="bg-emerald-500/15 text-emerald-400 text-[9px] font-bold px-1.5 py-0.5 rounded border border-emerald-500/30">
+                                  سیستمی
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[10px] text-slate-400 block mt-0.5 font-semibold">
+                              نام امضاکننده: {sig.name}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 sm:mr-auto">
+                          {/* Toggle visibility */}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleSignatureVisibility(sig.id)}
+                            disabled={isReadOnly}
+                            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all border cursor-pointer ${
+                              sig.isVisible
+                                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20'
+                                : 'bg-slate-950 border-slate-850 text-slate-500 hover:text-slate-400'
+                            }`}
+                          >
+                            {sig.isVisible ? (
+                              <>
+                                <ToggleRight className="h-4.5 w-4.5" />
+                                <span>نمایش فعال</span>
+                              </>
+                            ) : (
+                              <>
+                                <ToggleLeft className="h-4.5 w-4.5" />
+                                <span>غیرفعال (عدم نمایش)</span>
+                              </>
+                            )}
+                          </button>
+
+                          {/* Delete custom signatures */}
+                          {!isDefault && !isReadOnly && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSignature(sig.id)}
+                              className="p-1.5 rounded-lg border bg-rose-500/5 hover:bg-rose-500/15 border-rose-500/20 hover:border-rose-500/40 text-rose-400 cursor-pointer transition-all"
+                              title="حذف دائمی باکس امضا"
+                            >
+                              <Trash2 className="h-4.5 w-4.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+            </div>
+
           </div>
         )}
 

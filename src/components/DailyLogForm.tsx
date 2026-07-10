@@ -4,9 +4,10 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Meal, WeeklyMenu, CustomField, DailyLog, DayOfWeek } from '../types';
-import { getDayOfWeekFromGregorian, getDayNameInPersian, formatToJalali, toPersianDigits } from '../utils/farsi';
+import { Meal, WeeklyMenu, CustomField, DailyLog, DayOfWeek, SystemSettings } from '../types';
+import { getDayOfWeekFromGregorian, getDayNameInPersian, formatToJalali, toPersianDigits, getIranLocalDateStr, getJalaliMonthName, jalaliToGregorian, getJalaaliMonthLength, gregorianToJalali } from '../utils/farsi';
 import { exportToCSV, printToPDF } from '../utils/exportHelpers';
+import ExportSelectionModal from './ExportSelectionModal';
 import {
   Calendar,
   ClipboardEdit,
@@ -28,6 +29,7 @@ interface DailyLogFormProps {
   logs: DailyLog[];
   onSaveLog: (log: DailyLog) => void;
   currentRole?: 'admin' | 'supervisor' | 'guest';
+  systemSettings: SystemSettings;
 }
 
 export default function DailyLogForm({
@@ -37,12 +39,33 @@ export default function DailyLogForm({
   logs,
   onSaveLog,
   currentRole = 'admin',
+  systemSettings,
 }: DailyLogFormProps) {
   // Current date & meal selection
   const [selectedDate, setSelectedDate] = useState<string>(() => {
-    return new Date().toISOString().split('T')[0];
+    return getIranLocalDateStr();
   });
   const [selectedMealId, setSelectedMealId] = useState<string>('lunch');
+
+  // Export selection modal states
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [exportModalType, setExportModalType] = useState<'excel' | 'pdf'>('excel');
+
+  // Convert selectedDate (Gregorian YYYY-MM-DD) to Jalaali
+  const { jy, jm, jd } = (() => {
+    if (!selectedDate) return { jy: 1405, jm: 4, jd: 18 };
+    const [y, m, d] = selectedDate.split('-').map(Number);
+    if (isNaN(y) || isNaN(m) || isNaN(d)) return { jy: 1405, jm: 4, jd: 18 };
+    return gregorianToJalali(y, m, d);
+  })();
+
+  const handleShamsiDateChange = (newJy: number, newJm: number, newJd: number) => {
+    const maxDays = getJalaaliMonthLength(newJy, newJm);
+    const validatedJd = Math.min(newJd, maxDays);
+    const { gy, gm, gd } = jalaliToGregorian(newJy, newJm, validatedJd);
+    const dateString = `${gy}-${String(gm).padStart(2, '0')}-${String(gd).padStart(2, '0')}`;
+    setSelectedDate(dateString);
+  };
 
   // Form states matching DailyLog fields
   const [workshopPersonnel, setWorkshopPersonnel] = useState<number>(240);
@@ -166,112 +189,208 @@ export default function DailyLogForm({
   const computedWastage = contractorCooked - (receivedInRestaurant + forgottenTicket + takeaways);
   const complianceGap = officeAnnounced - (receivedInRestaurant + forgottenTicket + takeaways);
 
-  // Export current daily log data to Excel (CSV)
-  const handleExportExcel = () => {
-    const mealName = meals.find((m) => m.id === selectedMealId)?.name || selectedMealId;
-    const shamsi = formatToJalali(selectedDate);
-    const headers = [
-      'تاریخ شمسی',
-      'وعده غذایی',
-      'غذای منو',
-      'پرسنل حاضر کارگاه',
-      'آمار اداری',
-      'دستور پخت',
-      'پخت پیمانکار',
-      'دریافت رستوران',
-      'فیش فراموشی',
-      'بیرون‌بر',
-      'خروجی سیستم',
-      'پرت غذا',
-      'مغایرت اداری',
-      'یادداشت'
-    ];
-    
-    const row = [
-      shamsi,
-      mealName,
-      currentFood,
-      workshopPersonnel,
-      officeAnnounced,
-      cookingInstruction,
-      contractorCooked,
-      receivedInRestaurant,
-      forgottenTicket,
-      takeaways,
-      systemOutput,
-      computedWastage,
-      complianceGap,
-      note || 'بدون یادداشت'
+  // Return list of available fields to export
+  const getDailyLogExportItems = () => {
+    const items = [
+      { key: 'workshopPersonnel', label: 'کل پرسنل حاضر کارگاه', category: 'ظرفیت کارگاه' },
+      { key: 'officeAnnounced', label: 'آمار اعلام شده اداری', category: 'اداری' },
+      { key: 'cookingInstruction', label: 'دستور پخت روزانه به پیمانکار', category: 'پیمانکار' },
+      { key: 'contractorCooked', label: 'آمار پخت غذا توسط پیمانکار', category: 'پیمانکار' },
+      { key: 'receivedInRestaurant', label: 'دریافت غذا در رستوران (کارت)', category: 'رستوران' },
+      { key: 'forgottenTicket', label: 'دریافت غذا با فیش فراموشی', category: 'رستوران' },
+      { key: 'takeaways', label: 'دریافت غذا بیرون بر (ثبت گروهی)', category: 'رستوران' },
+      { key: 'systemOutput', label: 'آمار خروجی سامانه', category: 'سیستم' },
+      { key: 'wastage', label: 'میزان پرت غذا (مغایرت پخت/مصرف)', category: 'محاسباتی' },
+      { key: 'complianceGap', label: 'مغایرت آمار اداری با مصرف واقعی', category: 'محاسباتی' },
     ];
 
-    exportToCSV(`آمار_رستوران_روز_${shamsi}_${mealName}`, headers, [row]);
-  };
-
-  // Export current daily log data to printable PDF layout
-  const handleExportPDF = () => {
-    const mealName = meals.find((m) => m.id === selectedMealId)?.name || selectedMealId;
-    const shamsi = formatToJalali(selectedDate);
-    
-    const headers = ['ردیف', 'پارامتر آماری رستوران بوشهر', 'مقدار (پرس/نفر)', 'دسته بندی پارامتر'];
-    const baseRows = [
-      ['۱', 'کل پرسنل حاضر کارگاه', workshopPersonnel, 'ظرفیت کارگاه'],
-      ['۲', 'آمار روزانه اعلام شده اداری', officeAnnounced, 'اداری'],
-      ['۳', 'آمار دستور پخت روزانه به پیمانکار', cookingInstruction, 'پیمانکار'],
-      ['۴', 'آمار پخت غذا توسط پیمانکار', contractorCooked, 'پیمانکار'],
-      ['۵', 'آمار دریافت غذا در رستوران (کارت)', receivedInRestaurant, 'رستوران'],
-      ['۶', 'آمار دریافت غذا با فیش فراموشی', forgottenTicket, 'رستوران'],
-      ['۷', 'آمار دریافت غذا بیرون بر (ثبت گروهی)', takeaways, 'رستوران'],
-      ['۸', 'آمار خروجی سامانه', systemOutput, 'سیستم'],
-    ];
-
-    let counter = 9;
     customFields.forEach(field => {
-      const val = customValues[field.name] !== undefined ? customValues[field.name] : 0;
-      baseRows.push([
-        String(counter++),
-        field.label,
-        val,
-        field.category === 'input' ? 'ورودی سفارشی' : field.category === 'output' ? 'خروجی سفارشی' : 'اطلاعات سفارشی'
-      ]);
+      items.push({
+        key: `custom_${field.name}`,
+        label: field.label,
+        category: field.category === 'input' ? 'ورودی سفارشی' : field.category === 'output' ? 'خروجی سفارشی' : 'اطلاعات سفارشی'
+      });
     });
 
-    baseRows.push([
-      String(counter++),
-      'میزان پرت غذا (پخت منهای دریافت واقعی)',
-      computedWastage,
-      computedWastage > 0 ? 'پرت غذا (بستانکار کارگاه)' : 'صرفه‌جویی (بستانکار پیمانکار)'
-    ]);
+    items.push({ key: 'note', label: 'یادداشت‌ها و توضیحات روز', category: 'توضیحات' });
+    return items;
+  };
 
-    baseRows.push([
-      String(counter++),
-      'مغایرت آمار اداری با مصرف واقعی',
-      complianceGap,
-      complianceGap > 0 ? 'کسری مصرف اداری' : 'مازاد مصرف اداری'
-    ]);
+  const handleExportExcelClick = () => {
+    setExportModalType('excel');
+    setIsExportModalOpen(true);
+  };
 
-    if (note) {
-      baseRows.push([
-        String(counter++),
-        'یادداشت‌ها و جزئیات ثبت شده',
-        note,
-        'توضیحات روز'
-      ]);
+  const handleExportPDFClick = () => {
+    setExportModalType('pdf');
+    setIsExportModalOpen(true);
+  };
+
+  const executeDailyLogExport = (selectedKeys: string[]) => {
+    const mealName = meals.find((m) => m.id === selectedMealId)?.name || selectedMealId;
+    const shamsi = formatToJalali(selectedDate);
+
+    if (exportModalType === 'excel') {
+      const headers: string[] = ['تاریخ شمسی', 'وعده غذایی', 'غذای منو'];
+      const row: (string | number)[] = [shamsi, mealName, currentFood];
+
+      if (selectedKeys.includes('workshopPersonnel')) {
+        headers.push('پرسنل حاضر کارگاه');
+        row.push(workshopPersonnel);
+      }
+      if (selectedKeys.includes('officeAnnounced')) {
+        headers.push('آمار اداری');
+        row.push(officeAnnounced);
+      }
+      if (selectedKeys.includes('cookingInstruction')) {
+        headers.push('دستور پخت');
+        row.push(cookingInstruction);
+      }
+      if (selectedKeys.includes('contractorCooked')) {
+        headers.push('پخت پیمانکار');
+        row.push(contractorCooked);
+      }
+      if (selectedKeys.includes('receivedInRestaurant')) {
+        headers.push('دریافت رستوران');
+        row.push(receivedInRestaurant);
+      }
+      if (selectedKeys.includes('forgottenTicket')) {
+        headers.push('فیش فراموشی');
+        row.push(forgottenTicket);
+      }
+      if (selectedKeys.includes('takeaways')) {
+        headers.push('بیرون‌بر');
+        row.push(takeaways);
+      }
+      if (selectedKeys.includes('systemOutput')) {
+        headers.push('خروجی سیستم');
+        row.push(systemOutput);
+      }
+
+      customFields.forEach(field => {
+        if (selectedKeys.includes(`custom_${field.name}`)) {
+          headers.push(field.label);
+          row.push(customValues[field.name] !== undefined ? customValues[field.name] : 0);
+        }
+      });
+
+      if (selectedKeys.includes('wastage')) {
+        headers.push('پرت غذا');
+        row.push(computedWastage);
+      }
+      if (selectedKeys.includes('complianceGap')) {
+        headers.push('مغایرت اداری');
+        row.push(complianceGap);
+      }
+      if (selectedKeys.includes('note')) {
+        headers.push('یادداشت');
+        row.push(note || 'بدون یادداشت');
+      }
+
+      const rowData = [row];
+      if (systemSettings && systemSettings.signatures) {
+        rowData.push([]); // blank row
+        systemSettings.signatures.filter(s => s.isVisible).forEach(s => {
+          rowData.push([`امضای ${s.title}:`, s.name]);
+        });
+      }
+      exportToCSV(`آمار_رستوران_روز_${shamsi}_${mealName}`, headers, rowData, !!systemSettings.companyLogo);
+    } else {
+      // PDF Export
+      const headers = ['ردیف', 'پارامتر آماری رستوران بوشهر', 'مقدار (پرس/نفر)', 'دسته بندی پارامتر'];
+      const baseRows: (string | number)[][] = [];
+      let counter = 1;
+
+      if (selectedKeys.includes('workshopPersonnel')) {
+        baseRows.push([String(counter++), 'کل پرسنل حاضر کارگاه', workshopPersonnel, 'ظرفیت کارگاه']);
+      }
+      if (selectedKeys.includes('officeAnnounced')) {
+        baseRows.push([String(counter++), 'آمار روزانه اعلام شده اداری', officeAnnounced, 'اداری']);
+      }
+      if (selectedKeys.includes('cookingInstruction')) {
+        baseRows.push([String(counter++), 'آمار دستور پخت روزانه به پیمانکار', cookingInstruction, 'پیمانکار']);
+      }
+      if (selectedKeys.includes('contractorCooked')) {
+        baseRows.push([String(counter++), 'آمار پخت غذا توسط پیمانکار', contractorCooked, 'پیمانکار']);
+      }
+      if (selectedKeys.includes('receivedInRestaurant')) {
+        baseRows.push([String(counter++), 'آمار دریافت غذا در رستوران (کارت)', receivedInRestaurant, 'رستوران']);
+      }
+      if (selectedKeys.includes('forgottenTicket')) {
+        baseRows.push([String(counter++), 'آمار دریافت غذا با فیش فراموشی', forgottenTicket, 'رستوران']);
+      }
+      if (selectedKeys.includes('takeaways')) {
+        baseRows.push([String(counter++), 'آمار دریافت غذا بیرون بر (ثبت گروهی)', takeaways, 'رستوران']);
+      }
+      if (selectedKeys.includes('systemOutput')) {
+        baseRows.push([String(counter++), 'آمار خروجی سامانه', systemOutput, 'سیستم']);
+      }
+
+      customFields.forEach(field => {
+        if (selectedKeys.includes(`custom_${field.name}`)) {
+          const val = customValues[field.name] !== undefined ? customValues[field.name] : 0;
+          baseRows.push([
+            String(counter++),
+            field.label,
+            val,
+            field.category === 'input' ? 'ورودی سفارشی' : field.category === 'output' ? 'خروجی سفارشی' : 'اطلاعات سفارشی'
+          ]);
+        }
+      });
+
+      if (selectedKeys.includes('wastage')) {
+        baseRows.push([
+          String(counter++),
+          'میزان پرت غذا (پخت منهای دریافت واقعی)',
+          computedWastage,
+          computedWastage > 0 ? 'پرت غذا (بستانکار کارگاه)' : 'صرفه‌جویی (بستانکار پیمانکار)'
+        ]);
+      }
+
+      if (selectedKeys.includes('complianceGap')) {
+        baseRows.push([
+          String(counter++),
+          'مغایرت آمار اداری با مصرف واقعی',
+          complianceGap,
+          complianceGap > 0 ? 'کسری مصرف اداری' : 'مازاد مصرف اداری'
+        ]);
+      }
+
+      if (selectedKeys.includes('note') && note) {
+        baseRows.push([
+          String(counter++),
+          'یادداشت‌ها و جزئیات ثبت شده',
+          note,
+          'توضیحات روز'
+        ]);
+      }
+
+      const summaries = [];
+      const realConsumption = receivedInRestaurant + forgottenTicket + takeaways;
+      
+      if (selectedKeys.includes('receivedInRestaurant') || selectedKeys.includes('forgottenTicket') || selectedKeys.includes('takeaways')) {
+        summaries.push({ label: 'کل مصرف واقعی', value: realConsumption });
+      }
+      if (selectedKeys.includes('wastage')) {
+        summaries.push({ label: 'پرت پیمانکار', value: computedWastage });
+      }
+      if (selectedKeys.includes('complianceGap')) {
+        summaries.push({ label: 'مغایرت اداری', value: Math.abs(complianceGap) });
+      }
+      if (selectedKeys.includes('workshopPersonnel')) {
+        summaries.push({ label: 'پرسنل حاضر', value: workshopPersonnel });
+      }
+
+      printToPDF(
+        `گزارش آماری روزانه آمار رستوران کارگاهی بوشهر`,
+        `تاریخ: ${shamsi} | وعده: ${mealName} | منوی روز: ${currentFood}`,
+        headers,
+        baseRows,
+        summaries,
+        systemSettings.signatures,
+        systemSettings.companyLogo
+      );
     }
-
-    const summaries = [
-      { label: 'کل مصرف واقعی', value: receivedInRestaurant + forgottenTicket + takeaways },
-      { label: 'پرت پیمانکار', value: computedWastage },
-      { label: 'مغایرت اداری', value: Math.abs(complianceGap) },
-      { label: 'پرسنل حاضر', value: workshopPersonnel }
-    ];
-
-    printToPDF(
-      `گزارش آماری روزانه آمار رستوران کارگاهی بوشهر`,
-      `تاریخ: ${shamsi} | وعده: ${mealName} | منوی روز: ${currentFood}`,
-      headers,
-      baseRows,
-      summaries
-    );
   };
 
   return (
@@ -287,7 +406,7 @@ export default function DailyLogForm({
           {/* Export buttons for Daily Log */}
           <button
             type="button"
-            onClick={handleExportExcel}
+            onClick={handleExportExcelClick}
             className="bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 font-bold text-xs px-3 py-2 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
             title="خروجی اکسل این فرم"
           >
@@ -297,7 +416,7 @@ export default function DailyLogForm({
           
           <button
             type="button"
-            onClick={handleExportPDF}
+            onClick={handleExportPDFClick}
             className="bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 font-bold text-xs px-3 py-2 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
             title="چاپ نسخه PDF این فرم"
           >
@@ -322,14 +441,57 @@ export default function DailyLogForm({
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-6 bg-slate-950/40 p-4 rounded-xl border border-slate-800/80">
           
           <div>
-            <label className="block text-slate-300 text-xs font-semibold mb-2">۱. انتخاب تاریخ ثبت</label>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-800 bg-slate-950 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none font-mono text-slate-100"
-              required
-            />
+            <label className="block text-slate-300 text-xs font-semibold mb-2 flex justify-between items-center">
+              <span>۱. تاریخ ثبت (شمسی)</span>
+              <button
+                type="button"
+                onClick={() => setSelectedDate(getIranLocalDateStr())}
+                className="text-[10px] text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer font-bold"
+                title="رفتن به تاریخ امروز ایران"
+              >
+                برو به امروز
+              </button>
+            </label>
+            <div className="grid grid-cols-3 gap-1.5 h-[38px] items-center">
+              {/* Day Selector */}
+              <select
+                value={jd}
+                onChange={(e) => handleShamsiDateChange(jy, jm, Number(e.target.value))}
+                className="h-full px-2 py-1 border border-slate-800 bg-slate-950 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-emerald-500 outline-none font-mono text-slate-100 text-center"
+              >
+                {Array.from({ length: getJalaaliMonthLength(jy, jm) }, (_, i) => i + 1).map(dayNum => (
+                  <option key={dayNum} value={dayNum}>
+                    {toPersianDigits(dayNum)}
+                  </option>
+                ))}
+              </select>
+
+              {/* Month Selector */}
+              <select
+                value={jm}
+                onChange={(e) => handleShamsiDateChange(jy, Number(e.target.value), jd)}
+                className="h-full px-1 py-1 border border-slate-800 bg-slate-950 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-emerald-500 outline-none font-sans text-slate-100 text-center"
+              >
+                {Array.from({ length: 12 }, (_, i) => i + 1).map(monthNum => (
+                  <option key={monthNum} value={monthNum}>
+                    {getJalaliMonthName(monthNum)}
+                  </option>
+                ))}
+              </select>
+
+              {/* Year Selector */}
+              <select
+                value={jy}
+                onChange={(e) => handleShamsiDateChange(Number(e.target.value), jm, jd)}
+                className="h-full px-2 py-1 border border-slate-800 bg-slate-950 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-emerald-500 outline-none font-mono text-slate-100 text-center"
+              >
+                {[1403, 1404, 1405, 1406, 1407, 1408].map(yearNum => (
+                  <option key={yearNum} value={yearNum}>
+                    {toPersianDigits(yearNum)}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div>
@@ -637,6 +799,16 @@ export default function DailyLogForm({
         </div>
 
       </form>
+
+      <ExportSelectionModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        onConfirm={executeDailyLogExport}
+        availableItems={getDailyLogExportItems()}
+        title={exportModalType === 'excel' ? 'انتخاب آیتم‌های آماری برای خروجی اکسل' : 'انتخاب آیتم‌های آماری برای خروجی PDF'}
+        subtitle="لطفاً آیتم‌های آماری مورد نظر خود را جهت قرارگیری در فایل خروجی تیک بزنید."
+        exportType={exportModalType}
+      />
     </div>
   );
 }

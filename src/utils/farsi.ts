@@ -3,40 +3,38 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { toJalaali, toGregorian, jalaaliMonthLength } from 'jalaali-js';
 import { DayOfWeek, Meal, WeeklyMenu, DailyLog } from '../types';
 
 // Convert Gregorian Date to Jalali (Shamsi) Date
 export function gregorianToJalali(gy: number, gm: number, gd: number): { jy: number; jm: number; jd: number } {
-  const g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 335];
-  const gy2 = gm > 2 ? gy + 1 : gy;
-  let g_day_no =
-    365 * gy +
-    Math.floor((gy2 + 3) / 4) -
-    Math.floor((gy2 + 99) / 100) +
-    Math.floor((gy2 + 399) / 400) -
-    80 +
-    gd +
-    g_d_m[gm - 1];
-  let jy = 979 + 33 * Math.floor(g_day_no / 12053) + 4 * Math.floor((g_day_no % 12053) / 1461);
-  g_day_no %= 1461;
-  if (g_day_no >= 366) {
-    jy += Math.floor((g_day_no - 1) / 365);
-    g_day_no = (g_day_no - 1) % 365;
-  }
-  let j_day_no = g_day_no + 78;
-  if (j_day_no >= 366) {
-    jy += 1;
-    j_day_no -= 366;
-  }
-  let jm = 1 + Math.floor(j_day_no / 31);
-  let jd = 0;
-  if (jm <= 6) {
-    jd = (j_day_no % 31) + 1;
-  } else {
-    jm = 7 + Math.floor((j_day_no - 186) / 30);
-    jd = ((j_day_no - 186) % 30) + 1;
-  }
-  return { jy, jm, jd };
+  return toJalaali(gy, gm, gd);
+}
+
+// Convert Jalali (Shamsi) Date to Gregorian Date
+export function jalaliToGregorian(jy: number, jm: number, jd: number): { gy: number; gm: number; gd: number } {
+  return toGregorian(jy, jm, jd);
+}
+
+// Get number of days in a Jalaali month
+export function getJalaaliMonthLength(jy: number, jm: number): number {
+  return jalaaliMonthLength(jy, jm);
+}
+
+// Get current date string (YYYY-MM-DD) in Iran timezone (Asia/Tehran)
+export function getIranLocalDateStr(): string {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Tehran',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour12: false
+  });
+  const parts = formatter.formatToParts(new Date());
+  const year = parts.find(p => p.type === 'year')?.value || '2026';
+  const month = parts.find(p => p.type === 'month')?.value || '07';
+  const day = parts.find(p => p.type === 'day')?.value || '10';
+  return `${year}-${month}-${day}`;
 }
 
 // Format date string (YYYY-MM-DD) to Jalali string (e.g. 1405/04/18)
@@ -143,7 +141,7 @@ export const DEFAULT_WEEKLY_MENU: WeeklyMenu[] = [
 // Generates simulated daily logs for testing monthly reports
 export function generateSampleDailyLogs(): DailyLog[] {
   const logs: DailyLog[] = [];
-  const today = new Date('2026-07-09'); // Anchor date from ADDITIONAL_METADATA
+  const today = new Date(getIranLocalDateStr()); // Anchor date from current Iran Local Time
   
   // Create logs for the past 45 days for all active meals
   for (let i = 45; i >= 0; i--) {
