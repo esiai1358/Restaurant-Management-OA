@@ -15,7 +15,7 @@ interface ConfigurationPanelProps {
   setWeeklyMenu: React.Dispatch<React.SetStateAction<WeeklyMenu[]>>;
   customFields: CustomField[];
   setCustomFields: React.Dispatch<React.SetStateAction<CustomField[]>>;
-  currentRole?: 'admin' | 'supervisor' | 'guest';
+  currentRole?: 'admin' | 'supervisor' | 'operator' | 'guest';
   systemSettings: SystemSettings;
   onUpdateSystemSettings: (newSettings: SystemSettings, detail: string) => void;
 }
@@ -49,11 +49,17 @@ export default function ConfigurationPanel({
   const [editingMenuId, setEditingMenuId] = useState<string | null>(null);
   const [editingFoodName, setEditingFoodName] = useState('');
 
+  // Meal editing states
+  const [editingMealTimeId, setEditingMealTimeId] = useState<string | null>(null);
+  const [editingMealName, setEditingMealName] = useState('');
+  const [editingMealStart, setEditingMealStart] = useState('12:00');
+  const [editingMealEnd, setEditingMealEnd] = useState('13:00');
+
   // Signature States
   const [newSigTitle, setNewSigTitle] = useState('');
   const [newSigName, setNewSigName] = useState('');
 
-  const isReadOnly = currentRole !== 'admin';
+  const isReadOnly = currentRole !== 'admin' && currentRole !== 'supervisor';
 
   const handleUpdateContractorName = (name: string) => {
     const updatedSigs = systemSettings.signatures.map(sig => 
@@ -198,6 +204,26 @@ export default function ConfigurationPanel({
     setWeeklyMenu(weeklyMenu.filter(m => m.mealId !== id));
   };
 
+  const startEditingMeal = (meal: Meal) => {
+    if (isReadOnly) return;
+    setEditingMealTimeId(meal.id);
+    setEditingMealName(meal.name);
+    setEditingMealStart(meal.startTime);
+    setEditingMealEnd(meal.endTime);
+  };
+
+  const saveMealEdit = (id: string) => {
+    if (isReadOnly) return;
+    if (!editingMealName.trim()) return;
+    setMeals(meals.map(m => m.id === id ? { 
+      ...m, 
+      name: editingMealName.trim(), 
+      startTime: editingMealStart, 
+      endTime: editingMealEnd 
+    } : m));
+    setEditingMealTimeId(null);
+  };
+
   // Add custom dynamic field
   const handleAddCustomField = (e: React.FormEvent) => {
     e.preventDefault();
@@ -308,7 +334,7 @@ export default function ConfigurationPanel({
             <div>
               <p className="font-bold mb-1">دسترسی محدود (فقط خواندنی)</p>
               <p className="leading-relaxed text-slate-300">
-                شما با نقش <span className="font-extrabold text-amber-300">«{currentRole === 'supervisor' ? 'سرپرست خدمات' : 'مهمان'}»</span> وارد شده‌اید. تغییرات در پیکربندی پایه رستوران (برنامه غذایی هفتگی، وعده‌ها و پارامترها) منحصراً متعلق به نقش <span className="font-extrabold text-slate-100">«مدیر سیستم»</span> می‌باشد.
+                شما با نقش <span className="font-extrabold text-amber-300">«{currentRole === 'operator' ? 'مسئول خدمات (اپراتور)' : 'مهمان (ناظر)'}»</span> وارد شده‌اید. تغییرات در پیکربندی پایه رستوران (برنامه غذایی هفتگی، وعده‌ها و پارامترها) منحصراً متعلق به نقش‌های <span className="font-extrabold text-slate-100">«مدیر سیستم»</span> و <span className="font-extrabold text-slate-100">«سرپرست خدمات»</span> می‌باشد.
               </p>
             </div>
           </div>
@@ -445,6 +471,67 @@ export default function ConfigurationPanel({
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {meals.map(meal => {
                 const isDefault = ['breakfast', 'lunch', 'dinner'].includes(meal.id);
+                const isEditing = editingMealTimeId === meal.id;
+
+                if (isEditing) {
+                  return (
+                    <div
+                      key={meal.id}
+                      className="p-4 rounded-xl border border-emerald-500/50 bg-slate-950 shadow-xl flex flex-col justify-between"
+                    >
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-slate-400 text-[10px] mb-1 font-bold">نام وعده</label>
+                          <input
+                            type="text"
+                            value={editingMealName}
+                            onChange={(e) => setEditingMealName(e.target.value)}
+                            className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-slate-100 text-xs focus:ring-1 focus:ring-emerald-500 outline-none font-bold"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-slate-400 text-[10px] mb-1 font-bold">ساعت شروع</label>
+                            <input
+                              type="time"
+                              value={editingMealStart}
+                              onChange={(e) => setEditingMealStart(e.target.value)}
+                              className="w-full px-2 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-slate-100 text-xs focus:ring-1 focus:ring-emerald-500 outline-none font-mono text-center font-bold"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-slate-400 text-[10px] mb-1 font-bold">ساعت پایان</label>
+                            <input
+                              type="time"
+                              value={editingMealEnd}
+                              onChange={(e) => setEditingMealEnd(e.target.value)}
+                              className="w-full px-2 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-slate-100 text-xs focus:ring-1 focus:ring-emerald-500 outline-none font-mono text-center font-bold"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-slate-900">
+                        <button
+                          type="button"
+                          onClick={() => setEditingMealTimeId(null)}
+                          className="px-2.5 py-1 text-slate-400 hover:text-slate-200 bg-slate-900 border border-slate-800 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                        >
+                          انصراف
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => saveMealEdit(meal.id)}
+                          className="px-3 py-1 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 rounded-lg text-xs font-extrabold flex items-center gap-1 transition-all cursor-pointer"
+                        >
+                          <Check className="h-3.5 w-3.5 stroke-[3px]" />
+                          <span>ذخیره</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
+
                 return (
                   <div
                     key={meal.id}
@@ -470,6 +557,18 @@ export default function ConfigurationPanel({
                       <div className="flex items-center gap-1.5">
                         {!isReadOnly && (
                           <button
+                            type="button"
+                            onClick={() => startEditingMeal(meal)}
+                            className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg cursor-pointer transition-all"
+                            title="ویرایش وعده"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+
+                        {!isReadOnly && (
+                          <button
+                            type="button"
                             onClick={() => handleToggleMeal(meal.id)}
                             className={`text-xs px-2 py-1 rounded-md font-semibold cursor-pointer transition-all ${
                               meal.isActive
@@ -489,6 +588,7 @@ export default function ConfigurationPanel({
                         
                         {!isDefault && !isReadOnly && (
                           <button
+                            type="button"
                             onClick={() => handleDeleteMeal(meal.id)}
                             className="p-1.5 text-rose-400 hover:bg-rose-500/10 rounded-lg cursor-pointer transition-all"
                             title="حذف وعده"
@@ -819,6 +919,35 @@ export default function ConfigurationPanel({
                 </div>
               </div>
 
+            </div>
+
+            {/* Desktop App Download Card */}
+            <div className="bg-gradient-to-br from-indigo-950 to-slate-950 border border-indigo-500/20 rounded-2xl p-6 shadow-lg shadow-indigo-500/5 mt-6">
+              <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+                <div className="space-y-2 text-right">
+                  <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold px-2.5 py-1 rounded-full border border-indigo-500/30">
+                    نسخه دسکتاپ آفلاین (تک‌کلیک)
+                  </span>
+                  <h3 className="font-extrabold text-slate-100 text-base flex items-center gap-2">
+                    دانلود برنامه آماده نصب و اجرای آفلاین ویندوز
+                  </h3>
+                  <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
+                    با دانلود این فایل اجرایی (EXE)، می‌توانید کل سیستم کترینگ بوشهر را بدون نیاز به اینترنت و به صورت کاملاً مستقل روی سیستم‌های کارگاه یا کانکس کترینگ اجرا کنید. تمامی اطلاعات به صورت آفلاین بر روی سیستم شما محفوظ خواهند ماند.
+                  </p>
+                  <p className="text-[10px] text-slate-500 font-semibold">
+                    حجم فایل: حدود ۳۷ مگابایت | نسخه مستقل ویندوز ۶۴ بیتی بدون نیاز به پیش‌نیاز یا نصب ملزومات اضافه
+                  </p>
+                </div>
+                
+                <a
+                  href="/boushehr_catering.exe"
+                  download="boushehr_catering.exe"
+                  className="bg-indigo-500 hover:bg-indigo-600 active:bg-indigo-700 text-slate-950 font-extrabold text-xs px-6 py-3 rounded-xl transition-all shadow-md shadow-indigo-500/20 cursor-pointer flex items-center gap-2 shrink-0 select-none"
+                >
+                  <Upload className="h-4.5 w-4.5 rotate-180" />
+                  <span>دانلود نسخه ویندوز (boushehr_catering.exe)</span>
+                </a>
+              </div>
             </div>
 
           </div>

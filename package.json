@@ -7,9 +7,10 @@
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --outfile=dist/server.cjs",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js boushehr_catering.exe",
+    "start": "node dist/server.cjs",
+    "clean": "rm -rf dist server.js dist/boushehr_catering.exe",
     "lint": "tsc --noEmit",
-    "package:win": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --outfile=dist/server.cjs && pkg dist/server.cjs --targets node18-win-x64 --output boushehr_catering.exe"
+    "package:win": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --outfile=dist/server.cjs && pkg dist/server.cjs --targets node18-win-x64 --output dist/boushehr_catering.exe"
   },
   "pkg": {
     "assets": [

@@ -53,7 +53,7 @@ export interface DailyLog {
 export interface AppUser {
   id: string;
   name: string;
-  role: 'admin' | 'supervisor' | 'guest';
+  role: 'admin' | 'supervisor' | 'operator' | 'guest';
   createdAt: string;
   password?: string; // Optional password for users, especially admin
 }

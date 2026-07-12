@@ -22,8 +22,8 @@ import { motion, AnimatePresence } from 'motion/react';
 
 interface UserManagementProps {
   users: AppUser[];
-  onAddUser: (name: string, role: 'admin' | 'supervisor' | 'guest', password?: string) => void;
-  onUpdateUserRole: (id: string, role: 'admin' | 'supervisor' | 'guest') => void;
+  onAddUser: (name: string, role: 'admin' | 'supervisor' | 'operator' | 'guest', password?: string) => void;
+  onUpdateUserRole: (id: string, role: 'admin' | 'supervisor' | 'operator' | 'guest') => void;
   onUpdateUserPassword: (id: string, password?: string) => void;
   onDeleteUser: (id: string) => void;
   currentUserId: string;
@@ -38,7 +38,7 @@ export default function UserManagement({
   currentUserId,
 }: UserManagementProps) {
   const [newUserName, setNewUserName] = useState('');
-  const [newUserRole, setNewUserRole] = useState<'admin' | 'supervisor' | 'guest'>('supervisor');
+  const [newUserRole, setNewUserRole] = useState<'admin' | 'supervisor' | 'operator' | 'guest'>('supervisor');
   const [newUserPassword, setNewUserPassword] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
@@ -83,25 +83,31 @@ export default function UserManagement({
     }
   };
 
-  const getRoleInfo = (role: 'admin' | 'supervisor' | 'guest') => {
+  const getRoleInfo = (role: 'admin' | 'supervisor' | 'operator' | 'guest') => {
     switch (role) {
       case 'admin':
         return {
           label: 'مدیر سیستم (آدمین)',
           badgeClass: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-          desc: 'دسترسی کامل به تمامی ابزارها، تنظیمات و مدیریت کاربران',
+          desc: 'دسترسی کامل ویژه آدمین شامل مدیریت کاربران، لاگ امنیتی و ریست اطلاعات',
         };
       case 'supervisor':
         return {
           label: 'سرپرست خدمات کارگاه',
           badgeClass: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20',
-          desc: 'امکان ثبت و ویرایش آمار روزانه، گزارش‌گیری و خروجی اکسل و PDF',
+          desc: 'امکان ویرایش و اضافه کردن در بخش‌ها (تنظیم برنامه هفتگی، وعده‌ها و امضاها)',
+        };
+      case 'operator':
+        return {
+          label: 'مسئول خدمات (اپراتور)',
+          badgeClass: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
+          desc: 'امکان ویرایش و تکمیل کردن فرم‌ها و گزارشات روزانه',
         };
       case 'guest':
         return {
           label: 'مهمان (ناظر)',
           badgeClass: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-          desc: 'فقط مشاهده گزارشات، نمودارها و آمار ثبت شده بدون حق ویرایش',
+          desc: 'فقط دیدن و بازدید گزارشات و نمودارها بدون حق تغییر',
         };
     }
   };
@@ -175,9 +181,10 @@ export default function UserManagement({
                   onChange={(e) => setNewUserRole(e.target.value as any)}
                   className="w-full px-3 py-2 border border-slate-800 bg-slate-950 text-slate-100 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 outline-none cursor-pointer"
                 >
-                  <option value="supervisor">سرپرست خدمات کارگاه (ورود اطلاعات و گزارشات)</option>
-                  <option value="guest">مهمان / ناظر پروژه (فقط مشاهده آمار بدون ویرایش)</option>
-                  <option value="admin">مدیر سیستم (دسترسی کامل به تمامی بخش‌ها)</option>
+                  <option value="guest">مهمان / ناظر پروژه (فقط دیدن و بازدید)</option>
+                  <option value="operator">مسئول خدمات / اپراتور (ویرایش و تکمیل فرم‌ها)</option>
+                  <option value="supervisor">سرپرست خدمات کارگاه (ویرایش و اضافه کردن در بخش‌ها)</option>
+                  <option value="admin">مدیر سیستم / آدمین (دسترسی کامل ویژه آدمین)</option>
                 </select>
               </div>
 
@@ -287,6 +294,7 @@ export default function UserManagement({
                           >
                             <option value="admin">مدیر سیستم (آدمین)</option>
                             <option value="supervisor">سرپرست خدمات</option>
+                            <option value="operator">مسئول خدمات (اپراتور)</option>
                             <option value="guest">مهمان (ناظر)</option>
                           </select>
                         </div>

@@ -23,7 +23,7 @@ import {
 interface AuditLogPanelProps {
   logs: AuditLog[];
   onClearLogs: () => void;
-  currentRole: 'admin' | 'supervisor' | 'guest';
+  currentRole: 'admin' | 'supervisor' | 'operator' | 'guest';
 }
 
 export default function AuditLogPanel({
@@ -97,9 +97,11 @@ export default function AuditLogPanel({
   const getRoleLabel = (role: string) => {
     switch (role) {
       case 'admin':
-        return 'مدیر';
+        return 'مدیر ارشد';
       case 'supervisor':
         return 'سرپرست';
+      case 'operator':
+        return 'اپراتور';
       case 'guest':
         return 'ناظر';
       default:

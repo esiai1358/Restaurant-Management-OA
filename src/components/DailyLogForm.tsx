@@ -28,7 +28,7 @@ interface DailyLogFormProps {
   customFields: CustomField[];
   logs: DailyLog[];
   onSaveLog: (log: DailyLog) => void;
-  currentRole?: 'admin' | 'supervisor' | 'guest';
+  currentRole?: 'admin' | 'supervisor' | 'operator' | 'guest';
   systemSettings: SystemSettings;
 }
 
@@ -133,6 +133,11 @@ export default function DailyLogForm({
     }
   }, [selectedDate, selectedMealId, logs]);
 
+  // Auto-calculate system output based on: receivedInRestaurant + forgottenTicket + takeaways
+  useEffect(() => {
+    setSystemOutput((receivedInRestaurant || 0) + (forgottenTicket || 0) + (takeaways || 0));
+  }, [receivedInRestaurant, forgottenTicket, takeaways]);
+
   // Autofill smart helper
   const handleSmartAutofill = () => {
     if (isReadOnly) return;
@@ -192,8 +197,8 @@ export default function DailyLogForm({
   // Return list of available fields to export
   const getDailyLogExportItems = () => {
     const items = [
-      { key: 'workshopPersonnel', label: 'کل پرسنل حاضر کارگاه', category: 'ظرفیت کارگاه' },
-      { key: 'officeAnnounced', label: 'آمار اعلام شده اداری', category: 'اداری' },
+      { key: 'workshopPersonnel', label: 'آمار کل کارگاه', category: 'ظرفیت کارگاه' },
+      { key: 'officeAnnounced', label: 'آمار حضور روزانه ( اعلام شده اداری )', category: 'اداری' },
       { key: 'cookingInstruction', label: 'دستور پخت روزانه به پیمانکار', category: 'پیمانکار' },
       { key: 'contractorCooked', label: 'آمار پخت غذا توسط پیمانکار', category: 'پیمانکار' },
       { key: 'receivedInRestaurant', label: 'دریافت غذا در رستوران (کارت)', category: 'رستوران' },
@@ -226,164 +231,389 @@ export default function DailyLogForm({
     setIsExportModalOpen(true);
   };
 
-  const executeDailyLogExport = (selectedKeys: string[]) => {
-    const mealName = meals.find((m) => m.id === selectedMealId)?.name || selectedMealId;
+  const executeDailyLogExport = (selectedKeys: string[], selectedMealIds?: string[]) => {
     const shamsi = formatToJalali(selectedDate);
+    const targetMealIds = selectedMealIds && selectedMealIds.length > 0 ? selectedMealIds : [selectedMealId];
 
     if (exportModalType === 'excel') {
       const headers: string[] = ['تاریخ شمسی', 'وعده غذایی', 'غذای منو'];
-      const row: (string | number)[] = [shamsi, mealName, currentFood];
-
-      if (selectedKeys.includes('workshopPersonnel')) {
-        headers.push('پرسنل حاضر کارگاه');
-        row.push(workshopPersonnel);
-      }
-      if (selectedKeys.includes('officeAnnounced')) {
-        headers.push('آمار اداری');
-        row.push(officeAnnounced);
-      }
-      if (selectedKeys.includes('cookingInstruction')) {
-        headers.push('دستور پخت');
-        row.push(cookingInstruction);
-      }
-      if (selectedKeys.includes('contractorCooked')) {
-        headers.push('پخت پیمانکار');
-        row.push(contractorCooked);
-      }
-      if (selectedKeys.includes('receivedInRestaurant')) {
-        headers.push('دریافت رستوران');
-        row.push(receivedInRestaurant);
-      }
-      if (selectedKeys.includes('forgottenTicket')) {
-        headers.push('فیش فراموشی');
-        row.push(forgottenTicket);
-      }
-      if (selectedKeys.includes('takeaways')) {
-        headers.push('بیرون‌بر');
-        row.push(takeaways);
-      }
-      if (selectedKeys.includes('systemOutput')) {
-        headers.push('خروجی سیستم');
-        row.push(systemOutput);
-      }
+      
+      if (selectedKeys.includes('workshopPersonnel')) headers.push('آمار کل کارگاه');
+      if (selectedKeys.includes('officeAnnounced')) headers.push('آمار حضور روزانه ( اعلام شده اداری )');
+      if (selectedKeys.includes('cookingInstruction')) headers.push('دستور پخت');
+      if (selectedKeys.includes('contractorCooked')) headers.push('پخت پیمانکار');
+      if (selectedKeys.includes('receivedInRestaurant')) headers.push('دریافت رستوران');
+      if (selectedKeys.includes('forgottenTicket')) headers.push('فیش فراموشی');
+      if (selectedKeys.includes('takeaways')) headers.push('بیرون‌بر');
+      if (selectedKeys.includes('systemOutput')) headers.push('خروجی سیستم');
 
       customFields.forEach(field => {
         if (selectedKeys.includes(`custom_${field.name}`)) {
           headers.push(field.label);
-          row.push(customValues[field.name] !== undefined ? customValues[field.name] : 0);
         }
       });
 
-      if (selectedKeys.includes('wastage')) {
-        headers.push('پرت غذا');
-        row.push(computedWastage);
-      }
-      if (selectedKeys.includes('complianceGap')) {
-        headers.push('مغایرت اداری');
-        row.push(complianceGap);
-      }
-      if (selectedKeys.includes('note')) {
-        headers.push('یادداشت');
-        row.push(note || 'بدون یادداشت');
-      }
+      if (selectedKeys.includes('wastage')) headers.push('پرت غذا');
+      if (selectedKeys.includes('complianceGap')) headers.push('مغایرت اداری');
+      if (selectedKeys.includes('note')) headers.push('یادداشت');
 
-      const rowData = [row];
+      const rowsData: (string | number)[][] = [];
+
+      targetMealIds.forEach((mId) => {
+        const isCurrentActive = mId === selectedMealId;
+        
+        let mWorkshopPersonnel = workshopPersonnel;
+        let mOfficeAnnounced = officeAnnounced;
+        let mCookingInstruction = cookingInstruction;
+        let mContractorCooked = contractorCooked;
+        let mReceivedInRestaurant = receivedInRestaurant;
+        let mForgottenTicket = forgottenTicket;
+        let mTakeaways = takeaways;
+        let mSystemOutput = systemOutput;
+        let mCustomValues = customValues;
+        let mComputedWastage = computedWastage;
+        let mComplianceGap = complianceGap;
+        let mNote = note;
+
+        if (!isCurrentActive) {
+          const existingLog = logs.find(l => l.date === selectedDate && l.mealId === mId);
+          if (existingLog) {
+            mWorkshopPersonnel = existingLog.workshopPersonnel;
+            mOfficeAnnounced = existingLog.officeAnnounced;
+            mCookingInstruction = existingLog.cookingInstruction;
+            mContractorCooked = existingLog.contractorCooked;
+            mReceivedInRestaurant = existingLog.receivedInRestaurant;
+            mForgottenTicket = existingLog.forgottenTicket;
+            mTakeaways = existingLog.takeaways;
+            mSystemOutput = existingLog.systemOutput;
+            mCustomValues = existingLog.customValues || {};
+            mComputedWastage = mContractorCooked - (mReceivedInRestaurant + mForgottenTicket + mTakeaways);
+            mComplianceGap = mOfficeAnnounced - (mReceivedInRestaurant + mForgottenTicket + mTakeaways);
+            mNote = existingLog.note || '';
+          } else {
+            mWorkshopPersonnel = workshopPersonnel;
+            mOfficeAnnounced = 0;
+            mCookingInstruction = 0;
+            mContractorCooked = 0;
+            mReceivedInRestaurant = 0;
+            mForgottenTicket = 0;
+            mTakeaways = 0;
+            mSystemOutput = 0;
+            mCustomValues = {};
+            mComputedWastage = 0;
+            mComplianceGap = 0;
+            mNote = '';
+          }
+        }
+
+        const mealName = meals.find((m) => m.id === mId)?.name || mId;
+        const foodName = weeklyMenu.find(
+          item => item.day === currentDayOfWeek && item.mealId === mId
+        )?.foodName || 'تعریف نشده در برنامه غذایی';
+
+        const row: (string | number)[] = [shamsi, mealName, foodName];
+        if (selectedKeys.includes('workshopPersonnel')) row.push(mWorkshopPersonnel);
+        if (selectedKeys.includes('officeAnnounced')) row.push(mOfficeAnnounced);
+        if (selectedKeys.includes('cookingInstruction')) row.push(mCookingInstruction);
+        if (selectedKeys.includes('contractorCooked')) row.push(mContractorCooked);
+        if (selectedKeys.includes('receivedInRestaurant')) row.push(mReceivedInRestaurant);
+        if (selectedKeys.includes('forgottenTicket')) row.push(mForgottenTicket);
+        if (selectedKeys.includes('takeaways')) row.push(mTakeaways);
+        if (selectedKeys.includes('systemOutput')) row.push(mSystemOutput);
+
+        customFields.forEach(field => {
+          if (selectedKeys.includes(`custom_${field.name}`)) {
+            row.push(mCustomValues[field.name] !== undefined ? mCustomValues[field.name] : 0);
+          }
+        });
+
+        if (selectedKeys.includes('wastage')) row.push(mComputedWastage);
+        if (selectedKeys.includes('complianceGap')) row.push(mComplianceGap);
+        if (selectedKeys.includes('note')) row.push(mNote || 'بدون یادداشت');
+
+        rowsData.push(row);
+      });
+
       if (systemSettings && systemSettings.signatures) {
-        rowData.push([]); // blank row
+        rowsData.push([]); // blank row
         systemSettings.signatures.filter(s => s.isVisible).forEach(s => {
-          rowData.push([`امضای ${s.title}:`, s.name]);
+          rowsData.push([`امضای ${s.title}:`, s.name]);
         });
       }
-      exportToCSV(`آمار_رستوران_روز_${shamsi}_${mealName}`, headers, rowData, !!systemSettings.companyLogo);
+
+      const fileLabel = targetMealIds.length > 1 ? 'تجمیعی' : (meals.find(m => m.id === targetMealIds[0])?.name || targetMealIds[0]);
+      exportToCSV(`آمار_رستوران_روز_${shamsi}_${fileLabel}`, headers, rowsData, !!systemSettings.companyLogo);
     } else {
       // PDF Export
-      const headers = ['ردیف', 'پارامتر آماری رستوران بوشهر', 'مقدار (پرس/نفر)', 'دسته بندی پارامتر'];
+      // Let's retrieve all selected meals data
+      const mealsData = targetMealIds.map(mId => {
+        const isCurrentActive = mId === selectedMealId;
+        let mWorkshopPersonnel = workshopPersonnel;
+        let mOfficeAnnounced = officeAnnounced;
+        let mCookingInstruction = cookingInstruction;
+        let mContractorCooked = contractorCooked;
+        let mReceivedInRestaurant = receivedInRestaurant;
+        let mForgottenTicket = forgottenTicket;
+        let mTakeaways = takeaways;
+        let mSystemOutput = systemOutput;
+        let mCustomValues = customValues;
+        let mComputedWastage = computedWastage;
+        let mComplianceGap = complianceGap;
+        let mNote = note;
+
+        if (!isCurrentActive) {
+          const existingLog = logs.find(l => l.date === selectedDate && l.mealId === mId);
+          if (existingLog) {
+            mWorkshopPersonnel = existingLog.workshopPersonnel;
+            mOfficeAnnounced = existingLog.officeAnnounced;
+            mCookingInstruction = existingLog.cookingInstruction;
+            mContractorCooked = existingLog.contractorCooked;
+            mReceivedInRestaurant = existingLog.receivedInRestaurant;
+            mForgottenTicket = existingLog.forgottenTicket;
+            mTakeaways = existingLog.takeaways;
+            mSystemOutput = existingLog.systemOutput;
+            mCustomValues = existingLog.customValues || {};
+            mComputedWastage = mContractorCooked - (mReceivedInRestaurant + mForgottenTicket + mTakeaways);
+            mComplianceGap = mOfficeAnnounced - (mReceivedInRestaurant + mForgottenTicket + mTakeaways);
+            mNote = existingLog.note || '';
+          } else {
+            mWorkshopPersonnel = workshopPersonnel;
+            mOfficeAnnounced = 0;
+            mCookingInstruction = 0;
+            mContractorCooked = 0;
+            mReceivedInRestaurant = 0;
+            mForgottenTicket = 0;
+            mTakeaways = 0;
+            mSystemOutput = 0;
+            mCustomValues = {};
+            mComputedWastage = 0;
+            mComplianceGap = 0;
+            mNote = '';
+          }
+        }
+
+        return {
+          id: mId,
+          name: meals.find(m => m.id === mId)?.name || mId,
+          foodName: weeklyMenu.find(item => item.day === currentDayOfWeek && item.mealId === mId)?.foodName || 'تعریف نشده',
+          workshopPersonnel: mWorkshopPersonnel,
+          officeAnnounced: mOfficeAnnounced,
+          cookingInstruction: mCookingInstruction,
+          contractorCooked: mContractorCooked,
+          receivedInRestaurant: mReceivedInRestaurant,
+          forgottenTicket: mForgottenTicket,
+          takeaways: mTakeaways,
+          systemOutput: mSystemOutput,
+          customValues: mCustomValues,
+          computedWastage: mComputedWastage,
+          complianceGap: mComplianceGap,
+          note: mNote
+        };
+      });
+
+      // Build headers
+      let headers: string[];
+      if (targetMealIds.length === 1) {
+        headers = ['ردیف', 'پارامتر آماری رستوران بوشهر', 'مقدار (پرس/نفر)', 'دسته بندی پارامتر'];
+      } else {
+        headers = ['ردیف', 'پارامتر آماری رستوران بوشهر', ...mealsData.map(m => m.name), 'دسته بندی پارامتر'];
+      }
+
       const baseRows: (string | number)[][] = [];
       let counter = 1;
 
-      if (selectedKeys.includes('workshopPersonnel')) {
-        baseRows.push([String(counter++), 'کل پرسنل حاضر کارگاه', workshopPersonnel, 'ظرفیت کارگاه']);
-      }
-      if (selectedKeys.includes('officeAnnounced')) {
-        baseRows.push([String(counter++), 'آمار روزانه اعلام شده اداری', officeAnnounced, 'اداری']);
-      }
-      if (selectedKeys.includes('cookingInstruction')) {
-        baseRows.push([String(counter++), 'آمار دستور پخت روزانه به پیمانکار', cookingInstruction, 'پیمانکار']);
-      }
-      if (selectedKeys.includes('contractorCooked')) {
-        baseRows.push([String(counter++), 'آمار پخت غذا توسط پیمانکار', contractorCooked, 'پیمانکار']);
-      }
-      if (selectedKeys.includes('receivedInRestaurant')) {
-        baseRows.push([String(counter++), 'آمار دریافت غذا در رستوران (کارت)', receivedInRestaurant, 'رستوران']);
-      }
-      if (selectedKeys.includes('forgottenTicket')) {
-        baseRows.push([String(counter++), 'آمار دریافت غذا با فیش فراموشی', forgottenTicket, 'رستوران']);
-      }
-      if (selectedKeys.includes('takeaways')) {
-        baseRows.push([String(counter++), 'آمار دریافت غذا بیرون بر (ثبت گروهی)', takeaways, 'رستوران']);
-      }
-      if (selectedKeys.includes('systemOutput')) {
-        baseRows.push([String(counter++), 'آمار خروجی سامانه', systemOutput, 'سیستم']);
+      // 1. Menu Food Name Row
+      if (targetMealIds.length === 1) {
+        baseRows.push([String(counter++), 'برنامه غذایی منوی روز', mealsData[0].foodName, 'منوی غذا']);
+      } else {
+        baseRows.push([
+          String(counter++), 
+          'برنامه غذایی منوی روز', 
+          ...mealsData.map(m => m.foodName), 
+          'منوی غذا'
+        ]);
       }
 
+      // 2. Workshop Personnel
+      if (selectedKeys.includes('workshopPersonnel')) {
+        if (targetMealIds.length === 1) {
+          baseRows.push([String(counter++), 'آمار کل کارگاه', mealsData[0].workshopPersonnel, 'ظرفیت کارگاه']);
+        } else {
+          baseRows.push([String(counter++), 'آمار کل کارگاه', ...mealsData.map(m => m.workshopPersonnel), 'ظرفیت کارگاه']);
+        }
+      }
+
+      // 3. Office Announced
+      if (selectedKeys.includes('officeAnnounced')) {
+        if (targetMealIds.length === 1) {
+          baseRows.push([String(counter++), 'آمار حضور روزانه ( اعلام شده اداری )', mealsData[0].officeAnnounced, 'اداری']);
+        } else {
+          baseRows.push([String(counter++), 'آمار حضور روزانه ( اعلام شده اداری )', ...mealsData.map(m => m.officeAnnounced), 'اداری']);
+        }
+      }
+
+      // 4. Cooking Instruction
+      if (selectedKeys.includes('cookingInstruction')) {
+        if (targetMealIds.length === 1) {
+          baseRows.push([String(counter++), 'آمار دستور پخت روزانه به پیمانکار', mealsData[0].cookingInstruction, 'پیمانکار']);
+        } else {
+          baseRows.push([String(counter++), 'آمار دستور پخت روزانه به پیمانکار', ...mealsData.map(m => m.cookingInstruction), 'پیمانکار']);
+        }
+      }
+
+      // 5. Contractor Cooked
+      if (selectedKeys.includes('contractorCooked')) {
+        if (targetMealIds.length === 1) {
+          baseRows.push([String(counter++), 'آمار پخت غذا توسط پیمانکار', mealsData[0].contractorCooked, 'پیمانکار']);
+        } else {
+          baseRows.push([String(counter++), 'آمار پخت غذا توسط پیمانکار', ...mealsData.map(m => m.contractorCooked), 'پیمانکار']);
+        }
+      }
+
+      // 6. Received in Restaurant
+      if (selectedKeys.includes('receivedInRestaurant')) {
+        if (targetMealIds.length === 1) {
+          baseRows.push([String(counter++), 'آمار دریافت غذا در رستوران (کارت)', mealsData[0].receivedInRestaurant, 'رستوران']);
+        } else {
+          baseRows.push([String(counter++), 'آمار دریافت غذا در رستوران (کارت)', ...mealsData.map(m => m.receivedInRestaurant), 'رستوران']);
+        }
+      }
+
+      // 7. Forgotten Ticket
+      if (selectedKeys.includes('forgottenTicket')) {
+        if (targetMealIds.length === 1) {
+          baseRows.push([String(counter++), 'آمار دریافت غذا با فیش فراموشی', mealsData[0].forgottenTicket, 'رستوران']);
+        } else {
+          baseRows.push([String(counter++), 'آمار دریافت غذا با فیش فراموشی', ...mealsData.map(m => m.forgottenTicket), 'رستوران']);
+        }
+      }
+
+      // 8. Takeaways
+      if (selectedKeys.includes('takeaways')) {
+        if (targetMealIds.length === 1) {
+          baseRows.push([String(counter++), 'آمار دریافت غذا بیرون بر (ثبت گروهی)', mealsData[0].takeaways, 'رستوران']);
+        } else {
+          baseRows.push([String(counter++), 'آمار دریافت غذا بیرون بر (ثبت گروهی)', ...mealsData.map(m => m.takeaways), 'رستوران']);
+        }
+      }
+
+      // 9. System Output
+      if (selectedKeys.includes('systemOutput')) {
+        if (targetMealIds.length === 1) {
+          baseRows.push([String(counter++), 'آمار خروجی سامانه', mealsData[0].systemOutput, 'سیستم']);
+        } else {
+          baseRows.push([String(counter++), 'آمار خروجی سامانه', ...mealsData.map(m => m.systemOutput), 'سیستم']);
+        }
+      }
+
+      // Custom fields
       customFields.forEach(field => {
         if (selectedKeys.includes(`custom_${field.name}`)) {
-          const val = customValues[field.name] !== undefined ? customValues[field.name] : 0;
-          baseRows.push([
-            String(counter++),
-            field.label,
-            val,
-            field.category === 'input' ? 'ورودی سفارشی' : field.category === 'output' ? 'خروجی سفارشی' : 'اطلاعات سفارشی'
-          ]);
+          const catLabel = field.category === 'input' ? 'ورودی سفارشی' : field.category === 'output' ? 'خروجی سفارشی' : 'اطلاعات سفارشی';
+          if (targetMealIds.length === 1) {
+            const val = mealsData[0].customValues[field.name] !== undefined ? mealsData[0].customValues[field.name] : 0;
+            baseRows.push([String(counter++), field.label, val, catLabel]);
+          } else {
+            const vals = mealsData.map(m => m.customValues[field.name] !== undefined ? m.customValues[field.name] : 0);
+            baseRows.push([String(counter++), field.label, ...vals, catLabel]);
+          }
         }
       });
 
+      // Wastage
       if (selectedKeys.includes('wastage')) {
-        baseRows.push([
-          String(counter++),
-          'میزان پرت غذا (پخت منهای دریافت واقعی)',
-          computedWastage,
-          computedWastage > 0 ? 'پرت غذا (بستانکار کارگاه)' : 'صرفه‌جویی (بستانکار پیمانکار)'
-        ]);
+        if (targetMealIds.length === 1) {
+          baseRows.push([
+            String(counter++),
+            'میزان پرت غذا (پخت منهای دریافت واقعی)',
+            mealsData[0].computedWastage,
+            mealsData[0].computedWastage > 0 ? 'پرت غذا (بستانکار کارگاه)' : 'صرفه‌جویی (بستانکار پیمانکار)'
+          ]);
+        } else {
+          baseRows.push([
+            String(counter++),
+            'میزان پرت غذا (پخت منهای دریافت واقعی)',
+            ...mealsData.map(m => m.computedWastage),
+            'پرت غذا'
+          ]);
+        }
       }
 
+      // Compliance Gap
       if (selectedKeys.includes('complianceGap')) {
-        baseRows.push([
-          String(counter++),
-          'مغایرت آمار اداری با مصرف واقعی',
-          complianceGap,
-          complianceGap > 0 ? 'کسری مصرف اداری' : 'مازاد مصرف اداری'
-        ]);
+        if (targetMealIds.length === 1) {
+          baseRows.push([
+            String(counter++),
+            'مغایرت آمار اداری با مصرف واقعی',
+            mealsData[0].complianceGap,
+            mealsData[0].complianceGap > 0 ? 'کسری مصرف اداری' : 'مازاد مصرف اداری'
+          ]);
+        } else {
+          baseRows.push([
+            String(counter++),
+            'مغایرت آمار اداری با مصرف واقعی',
+            ...mealsData.map(m => m.complianceGap),
+            'مغایرت آماری'
+          ]);
+        }
       }
 
-      if (selectedKeys.includes('note') && note) {
-        baseRows.push([
-          String(counter++),
-          'یادداشت‌ها و جزئیات ثبت شده',
-          note,
-          'توضیحات روز'
-        ]);
+      // Note
+      if (selectedKeys.includes('note')) {
+        const hasAnyNote = mealsData.some(m => m.note);
+        if (hasAnyNote) {
+          if (targetMealIds.length === 1) {
+            baseRows.push([String(counter++), 'یادداشت‌ها و جزئیات ثبت شده', mealsData[0].note || '-', 'توضیحات روز']);
+          } else {
+            baseRows.push([String(counter++), 'یادداشت‌ها و جزئیات ثبت شده', ...mealsData.map(m => m.note || '-'), 'توضیحات روز']);
+          }
+        }
       }
 
+      // Build summaries card
       const summaries = [];
-      const realConsumption = receivedInRestaurant + forgottenTicket + takeaways;
-      
-      if (selectedKeys.includes('receivedInRestaurant') || selectedKeys.includes('forgottenTicket') || selectedKeys.includes('takeaways')) {
-        summaries.push({ label: 'کل مصرف واقعی', value: realConsumption });
+      if (targetMealIds.length === 1) {
+        const mData = mealsData[0];
+        const realCons = mData.receivedInRestaurant + mData.forgottenTicket + mData.takeaways;
+        if (selectedKeys.includes('receivedInRestaurant') || selectedKeys.includes('forgottenTicket') || selectedKeys.includes('takeaways')) {
+          summaries.push({ label: 'کل مصرف واقعی', value: realCons });
+        }
+        if (selectedKeys.includes('wastage')) {
+          summaries.push({ label: 'پرت پیمانکار', value: mData.computedWastage });
+        }
+        if (selectedKeys.includes('complianceGap')) {
+          summaries.push({ label: 'مغایرت اداری', value: Math.abs(mData.complianceGap) });
+        }
+        if (selectedKeys.includes('workshopPersonnel')) {
+          summaries.push({ label: 'پرسنل حاضر', value: mData.workshopPersonnel });
+        }
+      } else {
+        const totalRealCons = mealsData.reduce((acc, m) => acc + m.receivedInRestaurant + m.forgottenTicket + m.takeaways, 0);
+        const totalWastage = mealsData.reduce((acc, m) => acc + m.computedWastage, 0);
+        const totalOffice = mealsData.reduce((acc, m) => acc + m.officeAnnounced, 0);
+        
+        if (selectedKeys.includes('receivedInRestaurant') || selectedKeys.includes('forgottenTicket') || selectedKeys.includes('takeaways')) {
+          summaries.push({ label: 'مجموع مصرف واقعی روز', value: totalRealCons });
+        }
+        if (selectedKeys.includes('wastage')) {
+          summaries.push({ label: 'مجموع پرت غذای روز', value: totalWastage });
+        }
+        if (selectedKeys.includes('officeAnnounced')) {
+          summaries.push({ label: 'مجموع اعلام اداری روز', value: totalOffice });
+        }
       }
-      if (selectedKeys.includes('wastage')) {
-        summaries.push({ label: 'پرت پیمانکار', value: computedWastage });
-      }
-      if (selectedKeys.includes('complianceGap')) {
-        summaries.push({ label: 'مغایرت اداری', value: Math.abs(complianceGap) });
-      }
-      if (selectedKeys.includes('workshopPersonnel')) {
-        summaries.push({ label: 'پرسنل حاضر', value: workshopPersonnel });
-      }
+
+      const reportTitle = targetMealIds.length === 1 
+        ? `گزارش آماری روزانه آمار رستوران کارگاهی بوشهر`
+        : `گزارش آماری تجمیعی روزانه آمار رستوران کارگاهی بوشهر`;
+
+      const reportSubtitle = targetMealIds.length === 1
+        ? `تاریخ: ${shamsi} | وعده: ${mealsData[0].name}`
+        : `تاریخ: ${shamsi} | وعده‌های انتخابی: ${mealsData.map(m => m.name).join(' و ')}`;
 
       printToPDF(
-        `گزارش آماری روزانه آمار رستوران کارگاهی بوشهر`,
-        `تاریخ: ${shamsi} | وعده: ${mealName} | منوی روز: ${currentFood}`,
+        reportTitle,
+        reportSubtitle,
         headers,
         baseRows,
         summaries,
@@ -515,7 +745,7 @@ export default function DailyLogForm({
           </div>
 
           <div>
-            <label className="block text-slate-300 text-xs font-semibold mb-2">۳. تعداد کل نفرات حاضر کارگاه</label>
+            <label className="block text-slate-300 text-xs font-semibold mb-2">۳. آمار کل کارگاه</label>
             <input
               type="number"
               min="0"
@@ -558,7 +788,7 @@ export default function DailyLogForm({
             <div className="bg-slate-950/50 border border-slate-800 rounded-xl p-3 shadow-sm hover:border-slate-700 transition-all flex flex-col justify-between">
               <div>
                 <span className="text-[10px] font-bold text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-full">اداری</span>
-                <label className="block text-slate-300 text-xs font-semibold mt-1.5 mb-1">آمار اعلام شده اداری</label>
+                <label className="block text-slate-300 text-xs font-semibold mt-1.5 mb-1">آمار حضور روزانه ( اعلام شده اداری )</label>
               </div>
               <input
                 type="number"
@@ -640,7 +870,6 @@ export default function DailyLogForm({
                 disabled={isReadOnly}
                 className="w-full px-3 py-1.5 border border-slate-800 bg-slate-950 text-slate-100 rounded-lg text-sm font-mono focus:ring-2 focus:ring-rose-500 outline-none disabled:opacity-60 disabled:cursor-not-allowed"
                 placeholder="0"
-                required
               />
             </div>
 
@@ -658,23 +887,22 @@ export default function DailyLogForm({
                 disabled={isReadOnly}
                 className="w-full px-3 py-1.5 border border-slate-800 bg-slate-950 text-slate-100 rounded-lg text-sm font-mono focus:ring-2 focus:ring-sky-500 outline-none disabled:opacity-60 disabled:cursor-not-allowed"
                 placeholder="0"
-                required
               />
             </div>
 
             {/* 7. System Output */}
-            <div className="bg-slate-950/50 border border-slate-800 rounded-xl p-3 shadow-sm hover:border-slate-700 transition-all flex flex-col justify-between">
+            <div className="bg-[#1e1b4b]/30 border border-indigo-950 rounded-xl p-3 shadow-sm hover:border-indigo-900 transition-all flex flex-col justify-between" title="محاسبه خودکار سیستم (دریافت رستوران + فیش فراموشی + بیرون بر)">
               <div>
-                <span className="text-[10px] font-bold text-purple-400 bg-purple-500/10 border border-purple-500/20 px-2 py-0.5 rounded-full">سیستم</span>
+                <span className="text-[10px] font-bold text-purple-400 bg-purple-500/10 border border-purple-500/20 px-2 py-0.5 rounded-full">محاسبه خودکار سیستم</span>
                 <label className="block text-slate-300 text-xs font-semibold mt-1.5 mb-1">آمار خروجی سامانه</label>
               </div>
               <input
                 type="number"
                 min="0"
-                value={systemOutput || ''}
+                value={systemOutput || 0}
                 onChange={(e) => setSystemOutput(Number(e.target.value))}
-                disabled={isReadOnly}
-                className="w-full px-3 py-1.5 border border-slate-800 bg-slate-950 text-slate-100 rounded-lg text-sm font-mono focus:ring-2 focus:ring-purple-500 outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+                disabled={true}
+                className="w-full px-3 py-1.5 border border-indigo-950 bg-slate-950 text-indigo-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-purple-500 outline-none disabled:opacity-80 disabled:cursor-not-allowed font-bold"
                 placeholder="0"
                 required
               />
@@ -808,6 +1036,8 @@ export default function DailyLogForm({
         title={exportModalType === 'excel' ? 'انتخاب آیتم‌های آماری برای خروجی اکسل' : 'انتخاب آیتم‌های آماری برای خروجی PDF'}
         subtitle="لطفاً آیتم‌های آماری مورد نظر خود را جهت قرارگیری در فایل خروجی تیک بزنید."
         exportType={exportModalType}
+        meals={activeMeals}
+        defaultSelectedMealId={selectedMealId}
       />
     </div>
   );

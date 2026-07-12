@@ -10,7 +10,7 @@ import { formatToJalali, toPersianDigits } from '../utils/farsi';
 import { AppUser, SystemSettings } from '../types';
 
 interface HeaderProps {
-  currentRole: 'admin' | 'supervisor' | 'guest';
+  currentRole: 'admin' | 'supervisor' | 'operator' | 'guest';
   users: AppUser[];
   currentUserId: string;
   onUserChange: (id: string) => void;
@@ -34,8 +34,15 @@ export default function Header({ currentRole, users, currentUserId, onUserChange
         return {
           bg: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30',
           badge: 'سرپرست خدمات کارگاه',
-          desc: 'ثبت و ویرایش آمار روزانه + خروجی اکسل و PDF',
+          desc: 'ثبت آمار روزانه + ویرایش پیکربندی و تعاریف پایه',
           icon: <Users className="h-4.5 w-4.5 text-indigo-400 shrink-0" />
+        };
+      case 'operator':
+        return {
+          bg: 'bg-blue-500/10 text-blue-400 border-blue-500/30',
+          badge: 'مسئول خدمات (اپراتور)',
+          desc: 'ثبت و تکمیل فرم‌های آمار روزانه و مشاهده گزارشات',
+          icon: <Users className="h-4.5 w-4.5 text-blue-400 shrink-0" />
         };
       case 'guest':
         return {
@@ -126,7 +133,7 @@ export default function Header({ currentRole, users, currentUserId, onUserChange
               >
                 {users.map((u) => (
                   <option key={u.id} value={u.id} className="bg-slate-900 text-slate-100 font-sans">
-                    {u.name} ({u.role === 'admin' ? 'آدمین' : u.role === 'supervisor' ? 'سرپرست' : 'مهمان'})
+                    {u.name} ({u.role === 'admin' ? 'آدمین' : u.role === 'supervisor' ? 'سرپرست' : u.role === 'operator' ? 'اپراتور' : 'مهمان'})
                   </option>
                 ))}
               </select>

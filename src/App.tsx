@@ -39,20 +39,29 @@ export default function App() {
   // Users State
   const [users, setUsers] = useState<AppUser[]>(() => {
     const saved = localStorage.getItem('omran_users');
+    const newDefaults: AppUser[] = [
+      { id: '1', name: 'مهدی اسماعیلی', role: 'admin', createdAt: '۱۴۰۵/۰۴/۱۸', password: '123' },
+      { id: '2', name: 'علی عباسی', role: 'supervisor', createdAt: '۱۴۰۵/۰۴/۱۸' },
+      { id: '3', name: 'ایوب خدایاری', role: 'supervisor', createdAt: '۱۴۰۵/۰۴/۱۸' },
+      { id: '4', name: 'علی افتاده', role: 'operator', createdAt: '۱۴۰۵/۰۴/۱۸' },
+      { id: '5', name: 'حسین مشایخ', role: 'guest', createdAt: '۱۴۰۵/۰۴/۱۸' }
+    ];
+
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        // If parsed is old defaults (doesn't contain Mahdi Esmaeili), upgrade immediately
+        if (parsed.length > 0 && !parsed.some((u: any) => u.name.includes('مهدی اسماعیلی'))) {
+          localStorage.setItem('omran_users', JSON.stringify(newDefaults));
+          return newDefaults;
+        }
+        return parsed;
       } catch (e) {
         // ignore
       }
     }
-    const defaults: AppUser[] = [
-      { id: '1', name: 'مهندس حسینی (مدیر ارشد)', role: 'admin', createdAt: '۱۴۰۵/۰۴/۱۸' },
-      { id: '2', name: 'مهندس رضایی (سرپرست خدمات)', role: 'supervisor', createdAt: '۱۴۰۵/۰۴/۱۸' },
-      { id: '3', name: 'مهندس احمدی (ناظر پروژه)', role: 'guest', createdAt: '۱۴۰۵/۰۴/۱۸' }
-    ];
-    localStorage.setItem('omran_users', JSON.stringify(defaults));
-    return defaults;
+    localStorage.setItem('omran_users', JSON.stringify(newDefaults));
+    return newDefaults;
   });
 
   const [currentUserId, setCurrentUserId] = useState<string>(() => {
@@ -209,7 +218,7 @@ export default function App() {
           userName: nextUser.name,
           userRole: nextUser.role,
           action: 'ورود',
-          details: `کاربر ${nextUser.name} با نقش ${nextUser.role === 'admin' ? 'مدیر ارشد' : nextUser.role === 'supervisor' ? 'سرپرست' : 'ناظر'} وارد سامانه شد.`
+          details: `کاربر ${nextUser.name} با نقش ${nextUser.role === 'admin' ? 'مدیر ارشد' : nextUser.role === 'supervisor' ? 'سرپرست' : nextUser.role === 'operator' ? 'اپراتور' : 'ناظر'} وارد سامانه شد.`
         };
         setAuditLogs((prev) => [loginLog, logoutLog, ...prev]);
       }
@@ -217,7 +226,7 @@ export default function App() {
   }, [currentUserId]);
 
   // User Administration Handlers
-  const handleAddUser = (name: string, role: 'admin' | 'supervisor' | 'guest', password?: string) => {
+  const handleAddUser = (name: string, role: 'admin' | 'supervisor' | 'operator' | 'guest', password?: string) => {
     const todayStr = new Date().toISOString().split('T')[0];
     const newUser: AppUser = {
       id: String(Date.now()),
@@ -227,16 +236,19 @@ export default function App() {
       password
     };
     setUsers((prev) => [...prev, newUser]);
-    addAuditLog('تغییر دسترسی', `کاربر جدید با نام ${name} و نقش ${role === 'admin' ? 'مدیر سیستم' : role === 'supervisor' ? 'سرپرست خدمات' : 'ناظر'} تعریف گردید.`);
+    
+    const roleLabel = role === 'admin' ? 'مدیر سیستم' : role === 'supervisor' ? 'سرپرست خدمات' : role === 'operator' ? 'اپراتور/مسئول خدمات' : 'ناظر';
+    addAuditLog('تغییر دسترسی', `کاربر جدید با نام ${name} و نقش ${roleLabel} تعریف گردید.`);
   };
 
-  const handleUpdateUserRole = (id: string, role: 'admin' | 'supervisor' | 'guest') => {
+  const handleUpdateUserRole = (id: string, role: 'admin' | 'supervisor' | 'operator' | 'guest') => {
     setUsers((prev) =>
       prev.map((u) => (u.id === id ? { ...u, role } : u))
     );
     const targetUser = users.find(u => u.id === id);
     if (targetUser) {
-      addAuditLog('تغییر دسترسی', `نقش کاربر ${targetUser.name} به ${role === 'admin' ? 'مدیر سیستم' : role === 'supervisor' ? 'سرپرست خدمات' : 'ناظر'} تغییر داده شد.`);
+      const roleLabel = role === 'admin' ? 'مدیر سیستم' : role === 'supervisor' ? 'سرپرست خدمات' : role === 'operator' ? 'اپراتور/مسئول خدمات' : 'ناظر';
+      addAuditLog('تغییر دسترسی', `نقش کاربر ${targetUser.name} به ${roleLabel} تغییر داده شد.`);
     }
   };
 

@@ -3,11 +3,13 @@ import path from 'path';
 import { exec } from 'child_process';
 
 const app = express();
-// Default port for desktop app
-const PORT = 4000;
+// Determine environment (works inside pkg snapshot and local node)
+const isPkg = typeof process !== 'undefined' && (process as any).pkg;
+
+const PORT = isPkg ? 4000 : 3000;
+const HOST = isPkg ? '127.0.0.1' : '0.0.0.0';
 
 // Determine directory for static files (works inside pkg snapshot and local node)
-const isPkg = typeof process !== 'undefined' && (process as any).pkg;
 const publicPath = isPkg 
   ? path.join(__dirname, 'dist') 
   : path.join(process.cwd(), 'dist');
@@ -24,30 +26,32 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(publicPath, 'index.html'));
 });
 
-app.listen(PORT, '127.0.0.1', () => {
+app.listen(PORT, HOST, () => {
   console.log('====================================================');
   console.log(`🚀 برنامه با موفقیت اجرا شد!`);
-  console.log(`🌐 در حال باز کردن مرورگر در آدرس: http://127.0.0.1:${PORT}`);
+  console.log(`🌐 آدرس دسترسی: http://${HOST}:${PORT}`);
   console.log('====================================================');
 
-  // Command to automatically open default browser
-  const url = `http://127.0.0.1:${PORT}`;
-  let command = '';
-  switch (process.platform) {
-    case 'win32':
-      command = `start ${url}`;
-      break;
-    case 'darwin':
-      command = `open ${url}`;
-      break;
-    default:
-      command = `xdg-open ${url}`;
-      break;
-  }
-  
-  exec(command, (err) => {
-    if (err) {
-      console.log(`⚠️ عدم امکان باز کردن خودکار مرورگر. لطفاً دستی آدرس زیر را وارد کنید:\n${url}`);
+  // Only open the browser automatically in desktop app mode (isPkg)
+  if (isPkg) {
+    const url = `http://127.0.0.1:${PORT}`;
+    let command = '';
+    switch (process.platform) {
+      case 'win32':
+        command = `start ${url}`;
+        break;
+      case 'darwin':
+        command = `open ${url}`;
+        break;
+      default:
+        command = `xdg-open ${url}`;
+        break;
     }
-  });
+    
+    exec(command, (err) => {
+      if (err) {
+        console.log(`⚠️ عدم امکان باز کردن خودکار مرورگر. لطفاً دستی آدرس زیر را وارد کنید:\n${url}`);
+      }
+    });
+  }
 });

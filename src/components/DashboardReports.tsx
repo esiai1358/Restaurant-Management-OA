@@ -5,9 +5,10 @@
 
 import React, { useState, useMemo } from 'react';
 import { DailyLog, Meal, CustomField, SystemSettings } from '../types';
-import { formatToJalali, getJalaliMonthName, toPersianDigits } from '../utils/farsi';
+import { formatToJalali, getJalaliMonthName, toPersianDigits, getIranLocalDateStr } from '../utils/farsi';
 import { exportToCSV, printToPDF } from '../utils/exportHelpers';
 import ExportSelectionModal from './ExportSelectionModal';
+import PresenceVsCookingChart from './PresenceVsCookingChart';
 import {
   BarChart,
   Bar,
@@ -54,6 +55,19 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
   const [selectedMealFilter, setSelectedMealFilter] = useState<string>('all'); // 'all' or specific meal id
   const [chartPeriod, setChartPeriod] = useState<'daily' | 'weekly' | 'monthly' | 'comparison'>('daily');
 
+  // Time range filtering panel state variables
+  const [timeRangeType, setTimeRangeType] = useState<'jalaliMonth' | 'last10days' | 'last30days' | 'custom'>('jalaliMonth');
+  
+  const todayStr = getIranLocalDateStr();
+  const tenDaysAgoStr = useMemo(() => {
+    const d = new Date(todayStr);
+    d.setDate(d.getDate() - 10);
+    return d.toISOString().split('T')[0];
+  }, [todayStr]);
+
+  const [customStartDate, setCustomStartDate] = useState<string>(tenDaysAgoStr);
+  const [customEndDate, setCustomEndDate] = useState<string>(todayStr);
+
   // Export selection modal states
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportModalType, setExportModalType] = useState<'excel' | 'pdf'>('excel');
@@ -77,34 +91,62 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
   // Map greg date to Jalali year and month, and filter logs
   const filteredLogs = useMemo(() => {
     return logs.filter((log) => {
-      // Convert log Gregorian date to Jalali
       if (!log.date) return false;
-      const [y, m, d] = log.date.split('-').map(Number);
-      if (isNaN(y) || isNaN(m) || isNaN(d)) return false;
       
-      const g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 335];
-      const gy2 = m > 2 ? y + 1 : y;
-      let g_day_no = 365 * y + Math.floor((gy2 + 3) / 4) - Math.floor((gy2 + 99) / 100) + Math.floor((gy2 + 399) / 400) - 80 + d + g_d_m[m - 1];
-      let jy = 979 + 33 * Math.floor(g_day_no / 12053) + 4 * Math.floor((g_day_no % 12053) / 1461);
-      g_day_no %= 1461;
-      if (g_day_no >= 366) {
-        jy += Math.floor((g_day_no - 1) / 365);
-        g_day_no = (g_day_no - 1) % 365;
-      }
-      let j_day_no = g_day_no + 78;
-      if (j_day_no >= 366) {
-        jy += 1;
-        j_day_no -= 366;
-      }
-      const jm = 1 + Math.floor(j_day_no / 31);
-
-      // Apply Year & Month filters
-      const matchYearMonth = jy === selectedYear && jm === selectedMonth;
       const matchMeal = selectedMealFilter === 'all' || log.mealId === selectedMealFilter;
-      
-      return matchYearMonth && matchMeal;
+      if (!matchMeal) return false;
+
+      if (timeRangeType === 'jalaliMonth') {
+        const [y, m, d] = log.date.split('-').map(Number);
+        if (isNaN(y) || isNaN(m) || isNaN(d)) return false;
+        
+        const g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 335];
+        const gy2 = m > 2 ? y + 1 : y;
+        let g_day_no = 365 * y + Math.floor((gy2 + 3) / 4) - Math.floor((gy2 + 99) / 100) + Math.floor((gy2 + 399) / 400) - 80 + d + g_d_m[m - 1];
+        let jy = 979 + 33 * Math.floor(g_day_no / 12053) + 4 * Math.floor((g_day_no % 12053) / 1461);
+        g_day_no %= 1461;
+        if (g_day_no >= 366) {
+          jy += Math.floor((g_day_no - 1) / 365);
+          g_day_no = (g_day_no - 1) % 365;
+        }
+        let j_day_no = g_day_no + 78;
+        if (j_day_no >= 366) {
+          jy += 1;
+          j_day_no -= 366;
+        }
+        const jm = 1 + Math.floor(j_day_no / 31);
+
+        return jy === selectedYear && jm === selectedMonth;
+      } else if (timeRangeType === 'last10days') {
+        const today = new Date(todayStr);
+        const tenDaysAgo = new Date(today);
+        tenDaysAgo.setDate(today.getDate() - 10);
+        
+        const logDate = new Date(log.date);
+        return logDate >= tenDaysAgo && logDate <= today;
+      } else if (timeRangeType === 'last30days') {
+        const today = new Date(todayStr);
+        const thirtyDaysAgo = new Date(today);
+        thirtyDaysAgo.setDate(today.getDate() - 30);
+        
+        const logDate = new Date(log.date);
+        return logDate >= thirtyDaysAgo && logDate <= today;
+      } else if (timeRangeType === 'custom') {
+        const logDate = new Date(log.date);
+        if (customStartDate) {
+          const start = new Date(customStartDate);
+          if (logDate < start) return false;
+        }
+        if (customEndDate) {
+          const end = new Date(customEndDate);
+          if (logDate > end) return false;
+        }
+        return true;
+      }
+
+      return false;
     });
-  }, [logs, selectedYear, selectedMonth, selectedMealFilter]);
+  }, [logs, selectedYear, selectedMonth, selectedMealFilter, timeRangeType, customStartDate, customEndDate, todayStr]);
 
   // Aggregate monthly statistics
   const aggregates = useMemo(() => {
@@ -296,14 +338,14 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
   // Return list of available fields to export
   const getReportsExportItems = () => {
     return [
-      { key: 'officeAnnounced', label: 'کل آمار اداری', category: 'اداری' },
+      { key: 'officeAnnounced', label: 'آمار حضور روزانه ( اعلام شده اداری )', category: 'اداری' },
       { key: 'cookingInstruction', label: 'کل دستور پخت', category: 'پیمانکار' },
       { key: 'contractorCooked', label: 'کل پخت پیمانکار', category: 'پیمانکار' },
       { key: 'receivedInRestaurant', label: 'دریافت واقعی رستوران (کارت)', category: 'رستوران' },
       { key: 'forgottenTicket', label: 'دریافت با فیش فراموشی', category: 'رستوران' },
       { key: 'takeaways', label: 'دریافت غذای بیرون‌بر', category: 'رستوران' },
       { key: 'systemOutput', label: 'آمار خروجی سامانه', category: 'سیستم' },
-      { key: 'workshopPersonnel', label: 'تعداد پرسنل کارگاه', category: 'ظرفیت' },
+      { key: 'workshopPersonnel', label: 'آمار کل کارگاه', category: 'ظرفیت' },
       { key: 'wastage', label: 'میزان پرت غذا', category: 'محاسباتی' },
     ];
   };
@@ -328,23 +370,42 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
 
   const executeReportsExport = (selectedKeys: string[]) => {
     if (filteredLogs.length === 0) return;
-    const monthName = getJalaliMonthName(selectedMonth);
+    
+    let rangeSubtitle = '';
+    let exportFileNameSuffix = '';
+    if (timeRangeType === 'jalaliMonth') {
+      const monthName = getJalaliMonthName(selectedMonth);
+      rangeSubtitle = `${monthName} ماه سال ${selectedYear}`;
+      exportFileNameSuffix = `${selectedYear}_${selectedMonth}`;
+    } else if (timeRangeType === 'last10days') {
+      rangeSubtitle = `۱۰ روز اخیر`;
+      exportFileNameSuffix = `10days`;
+    } else if (timeRangeType === 'last30days') {
+      rangeSubtitle = `۳۰ روز اخیر`;
+      exportFileNameSuffix = `30days`;
+    } else if (timeRangeType === 'custom') {
+      const startJ = customStartDate ? formatToJalali(customStartDate) : 'ابتدا';
+      const endJ = customEndDate ? formatToJalali(customEndDate) : 'انتها';
+      rangeSubtitle = `از ${startJ} تا ${endJ}`;
+      exportFileNameSuffix = `custom_${customStartDate || 'start'}_to_${customEndDate || 'end'}`;
+    }
 
     if (exportModalType === 'excel') {
       const headers: string[] = ['تاریخ', 'وعده غذایی'];
-      if (selectedKeys.includes('officeAnnounced')) headers.push('آمار اداری');
+      if (selectedKeys.includes('officeAnnounced')) headers.push('آمار حضور روزانه ( اعلام شده اداری )');
       if (selectedKeys.includes('cookingInstruction')) headers.push('دستور پخت');
       if (selectedKeys.includes('contractorCooked')) headers.push('پخت پیمانکار');
       if (selectedKeys.includes('receivedInRestaurant')) headers.push('دریافت رستوران');
       if (selectedKeys.includes('forgottenTicket')) headers.push('فیش فراموشی');
       if (selectedKeys.includes('takeaways')) headers.push('بیرون‌بر');
       if (selectedKeys.includes('systemOutput')) headers.push('خروجی سیستم');
-      if (selectedKeys.includes('workshopPersonnel')) headers.push('تعداد پرسنل');
+      if (selectedKeys.includes('workshopPersonnel')) headers.push('آمار کل کارگاه');
       if (selectedKeys.includes('wastage')) headers.push('پرت غذا');
 
       let csvContent = '\uFEFF'; // UTF-8 BOM for Persian excel alignment
       csvContent += `"شرکت عمران آذرستان - پروژه ساخت و ساز صنعتی بوشهر"${systemSettings?.companyLogo ? ',"(دارای لوگوی اختصاصی شرکت)"' : ''}\n`;
-      csvContent += `"گزارش عملکرد و مغایرت تجمعی ماهانه رستوران کارگاهی"\n\n`;
+      csvContent += `"گزارش عملکرد و مغایرت تجمعی دوره رستوران کارگاهی"\n`;
+      csvContent += `"دوره گزارش: ${rangeSubtitle}"\n\n`;
       csvContent += headers.join(',') + '\n';
 
       filteredLogs.forEach((log) => {
@@ -380,14 +441,14 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.setAttribute('href', url);
-      link.setAttribute('download', `گزارش_رستوران_${selectedYear}_${selectedMonth}.csv`);
+      link.setAttribute('download', `گزارش_رستوران_${exportFileNameSuffix}.csv`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
     } else {
       // PDF Dynamic
       const headers = ['تاریخ', 'وعده'];
-      if (selectedKeys.includes('officeAnnounced')) headers.push('آمار اداری');
+      if (selectedKeys.includes('officeAnnounced')) headers.push('آمار حضور روزانه ( اعلام شده اداری )');
       if (selectedKeys.includes('cookingInstruction')) headers.push('دستور پخت');
       if (selectedKeys.includes('contractorCooked')) headers.push('پخت پیمانکار');
       if (selectedKeys.includes('receivedInRestaurant')) headers.push('دریافت واقعی');
@@ -418,7 +479,7 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
 
       const summaries = [];
       if (selectedKeys.includes('officeAnnounced')) {
-        summaries.push({ label: 'کل آمار اداری دوره', value: aggregates.officeAnnounced });
+        summaries.push({ label: 'کل آمار حضور روزانه ( اعلام شده اداری ) دوره', value: aggregates.officeAnnounced });
       }
       if (selectedKeys.includes('contractorCooked')) {
         summaries.push({ label: 'کل غذای پخته شده', value: aggregates.contractorCooked });
@@ -432,7 +493,7 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
 
       printToPDF(
         `گزارش عملکرد و مغایرت تجمعی ماهانه رستوران کارگاهی بوشهر`,
-        `دوره گزارش: ${monthName} ماه سال ${selectedYear} | تعداد کل رکوردها: ${aggregates.count} مورد`,
+        `دوره گزارش: ${rangeSubtitle} | تعداد کل رکوردها: ${aggregates.count} مورد`,
         headers,
         rows,
         summaries,
@@ -472,34 +533,88 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
           </div>
         </div>
 
+        {/* Time Range Selector Panel */}
+        <div className="mb-6 bg-slate-950 p-1.5 rounded-xl border border-slate-800 flex flex-wrap gap-1 max-w-4xl text-right direction-rtl">
+          {[
+            { id: 'jalaliMonth', label: 'ماه شمسی خاص' },
+            { id: 'last10days', label: '۱۰ روز اخیر' },
+            { id: 'last30days', label: '۳۰ روز اخیر' },
+            { id: 'custom', label: 'محدوده تاریخ انتخابی (میلادی)' }
+          ].map((type) => (
+            <button
+              key={type.id}
+              onClick={() => setTimeRangeType(type.id as any)}
+              className={`px-4 py-2 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                timeRangeType === type.id
+                  ? 'bg-emerald-600 text-slate-950 shadow-md font-extrabold'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/40'
+              }`}
+            >
+              {type.label}
+            </button>
+          ))}
+        </div>
+
         {/* Filters Form Controls */}
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-          <div>
-            <label className="block text-slate-300 text-xs font-semibold mb-1.5">انتخاب سال شمسی</label>
-            <select
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(Number(e.target.value))}
-              className="w-full px-3 py-2 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-950 text-slate-100 font-mono"
-            >
-              <option value="1405" className="bg-slate-950 text-slate-100">۱۴۰۵</option>
-              <option value="1404" className="bg-slate-950 text-slate-100">۱۴۰۴</option>
-            </select>
-          </div>
+          {timeRangeType === 'jalaliMonth' ? (
+            <>
+              <div>
+                <label className="block text-slate-300 text-xs font-semibold mb-1.5">انتخاب سال شمسی</label>
+                <select
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(Number(e.target.value))}
+                  className="w-full px-3 py-2 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-950 text-slate-100 font-mono"
+                >
+                  <option value="1405" className="bg-slate-950 text-slate-100">۱۴۰۵</option>
+                  <option value="1404" className="bg-slate-950 text-slate-100">۱۴۰۴</option>
+                </select>
+              </div>
 
-          <div>
-            <label className="block text-slate-300 text-xs font-semibold mb-1.5">انتخاب ماه</label>
-            <select
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(Number(e.target.value))}
-              className="w-full px-3 py-2 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-950 text-slate-100"
-            >
-              {JALALI_MONTHS.map((m) => (
-                <option key={m.num} value={m.num} className="bg-slate-950 text-slate-100">
-                  {m.name}
-                </option>
-              ))}
-            </select>
-          </div>
+              <div>
+                <label className="block text-slate-300 text-xs font-semibold mb-1.5">انتخاب ماه</label>
+                <select
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                  className="w-full px-3 py-2 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-950 text-slate-100"
+                >
+                  {JALALI_MONTHS.map((m) => (
+                    <option key={m.num} value={m.num} className="bg-slate-950 text-slate-100">
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
+          ) : timeRangeType === 'custom' ? (
+            <>
+              <div>
+                <label className="block text-slate-300 text-xs font-semibold mb-1.5">تاریخ شروع</label>
+                <input
+                  type="date"
+                  value={customStartDate}
+                  onChange={(e) => setCustomStartDate(e.target.value)}
+                  className="w-full px-3 py-1.5 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-950 text-slate-100 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 text-xs font-semibold mb-1.5">تاریخ پایان</label>
+                <input
+                  type="date"
+                  value={customEndDate}
+                  onChange={(e) => setCustomEndDate(e.target.value)}
+                  className="w-full px-3 py-1.5 border border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-950 text-slate-100 font-mono"
+                />
+              </div>
+            </>
+          ) : (
+            <div className="sm:col-span-2 flex items-center bg-slate-950/40 border border-slate-850 p-3.5 rounded-xl">
+              <span className="text-xs text-slate-400">
+                گزارش برای بازه {timeRangeType === 'last10days' ? '۱۰ روز اخیر' : '۳۰ روز اخیر'} منتهی به تاریخ امروز ({toPersianDigits(formatToJalali(todayStr))}) فعال است.
+              </span>
+            </div>
+          )}
 
           <div>
             <label className="block text-slate-300 text-xs font-semibold mb-1.5">تفکیک وعده غذایی</label>
@@ -520,7 +635,7 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
           {/* Quick status badge */}
           <div className="flex items-center justify-center bg-slate-950 border border-slate-800 rounded-xl p-3">
             <div className="text-center">
-              <p className="text-[10px] text-slate-400">تعداد روزهای ثبت‌شده در این ماه</p>
+              <p className="text-[10px] text-slate-400">تعداد روزهای ثبت‌شده در این بازه</p>
               <p className="font-extrabold text-emerald-400 text-lg font-mono">
                 {toPersianDigits(Math.ceil(filteredLogs.length / (selectedMealFilter === 'all' ? meals.filter(m => m.isActive).length || 1 : 1)))} روز
               </p>
@@ -534,7 +649,9 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
           <CalendarDays className="h-12 w-12 text-slate-700 mx-auto mb-3" />
           <h3 className="font-bold text-slate-100 text-base mb-1">داده‌ای یافت نشد</h3>
           <p className="text-slate-400 text-xs leading-relaxed">
-            برای سال {toPersianDigits(selectedYear)} ماه {getJalaliMonthName(selectedMonth)} و فیلتر مشخص شده، هنوز هیچ آمار روزانه‌ای ثبت نشده است. لطفاً ابتدا در بخش اول تاریخ دلخواهی را ثبت کنید.
+            {timeRangeType === 'jalaliMonth' 
+              ? `برای سال ${toPersianDigits(selectedYear)} ماه ${getJalaliMonthName(selectedMonth)} و فیلتر مشخص شده، هنوز هیچ آمار روزانه‌ای ثبت نشده است. لطفاً ابتدا در بخش اول تاریخ دلخواهی را ثبت کنید.`
+              : 'برای بازه زمانی انتخاب شده و فیلتر مشخص شده، هنوز هیچ آمار روزانه‌ای ثبت نشده است. لطفاً ابتدا در بخش اول تاریخ دلخواهی را ثبت کنید.'}
           </p>
         </div>
       ) : (
@@ -545,7 +662,7 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
             {/* Total Office Announced Card */}
             <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 shadow-sm flex items-center justify-between">
               <div>
-                <p className="text-slate-400 text-[11px] leading-3">مجموع آمار اعلامی اداری</p>
+                <p className="text-slate-400 text-[11px] leading-3">مجموع آمار حضور روزانه ( اعلام شده اداری )</p>
                 <h3 className="font-extrabold text-indigo-400 text-xl font-mono mt-1.5">
                   {toPersianDigits(aggregates.officeAnnounced)}
                 </h3>
@@ -674,7 +791,7 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
                         <YAxis tick={{ fontSize: 10 }} stroke="#475569" />
                         <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', color: '#f8fafc', direction: 'rtl', textAlign: 'right', fontSize: 12, borderRadius: 8 }} />
                         <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
-                        <Bar name="آمار اعلامی اداری" dataKey="officeAnnounced" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                        <Bar name="آمار حضور روزانه ( اعلام شده اداری )" dataKey="officeAnnounced" fill="#6366f1" radius={[4, 4, 0, 0]} />
                         <Bar name="پخت پیمانکار" dataKey="contractorCooked" fill="#f59e0b" radius={[4, 4, 0, 0]} />
                         <Bar name="سامانه خروجی" dataKey="systemOutput" fill="#a855f7" radius={[4, 4, 0, 0]} />
                       </BarChart>
@@ -798,7 +915,7 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
                         <YAxis stroke="#475569" tick={{ fontSize: 10 }} />
                         <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', color: '#f8fafc', direction: 'rtl', textAlign: 'right', fontSize: 12, borderRadius: 8 }} />
                         <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
-                        <Bar name="کل آمار اداری" dataKey="officeAnnounced" fill="#6366f1" radius={[3, 3, 0, 0]} />
+                        <Bar name="کل آمار حضور روزانه ( اعلام شده اداری )" dataKey="officeAnnounced" fill="#6366f1" radius={[3, 3, 0, 0]} />
                         <Bar name="کل پخت پیمانکار" dataKey="contractorCooked" fill="#f59e0b" radius={[3, 3, 0, 0]} />
                         <Bar name="کل مصرف واقعی" dataKey="totalDistributed" fill="#10b981" radius={[3, 3, 0, 0]} />
                       </BarChart>
@@ -892,6 +1009,9 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
 
           </div>
 
+          {/* Live Comparison Chart: Presence vs Cooking Quantity */}
+          <PresenceVsCookingChart logs={logs} meals={meals} />
+
           {/* Complete Month Log List Table */}
           <div className="bg-[#0f172a] rounded-2xl border border-slate-800 shadow-sm overflow-hidden">
             <div className="px-6 py-4 bg-slate-900 border-b border-slate-800">
@@ -904,8 +1024,8 @@ export default function DashboardReports({ logs, meals, customFields, systemSett
                   <tr className="bg-slate-950/60 text-slate-300 font-bold border-b border-slate-800">
                     <th className="px-4 py-3">تاریخ (شمسی)</th>
                     <th className="px-4 py-3">وعده</th>
-                    <th className="px-4 py-3 text-center">ظرفیت کارگاه</th>
-                    <th className="px-4 py-3 text-center">آمار اداری</th>
+                    <th className="px-4 py-3 text-center">آمار کل کارگاه</th>
+                    <th className="px-4 py-3 text-center">آمار حضور روزانه ( اعلام شده اداری )</th>
                     <th className="px-4 py-3 text-center">دستور پخت</th>
                     <th className="px-4 py-3 text-center">پخت مرادی</th>
                     <th className="px-4 py-3 text-center">دریافت رستوران</th>

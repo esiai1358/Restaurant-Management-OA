@@ -7,6 +7,8 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Check, Square, CheckSquare, Download, Info } from 'lucide-react';
 
+import { Meal } from '../types';
+
 interface ExportSelectionModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -14,7 +16,9 @@ interface ExportSelectionModalProps {
   subtitle: string;
   exportType: 'excel' | 'pdf';
   availableItems: { key: string; label: string; category?: string }[];
-  onConfirm: (selectedKeys: string[]) => void;
+  onConfirm: (selectedKeys: string[], selectedMealIds?: string[]) => void;
+  meals?: Meal[];
+  defaultSelectedMealId?: string;
 }
 
 export default function ExportSelectionModal({
@@ -25,15 +29,26 @@ export default function ExportSelectionModal({
   exportType,
   availableItems,
   onConfirm,
+  meals,
+  defaultSelectedMealId,
 }: ExportSelectionModalProps) {
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [selectedMealIds, setSelectedMealIds] = useState<string[]>([]);
 
   // Set all items selected by default when opened
   useEffect(() => {
     if (isOpen) {
       setSelectedKeys(availableItems.map((item) => item.key));
+      if (meals) {
+        // Default to the currently active/selected meal if provided, otherwise all
+        if (defaultSelectedMealId) {
+          setSelectedMealIds([defaultSelectedMealId]);
+        } else {
+          setSelectedMealIds(meals.filter(m => m.isActive).map(m => m.id));
+        }
+      }
     }
-  }, [isOpen, availableItems]);
+  }, [isOpen, availableItems, meals, defaultSelectedMealId]);
 
   if (!isOpen) return null;
 
@@ -57,7 +72,11 @@ export default function ExportSelectionModal({
       alert('لطفاً حداقل یک مورد را جهت درج در گزارش انتخاب کنید.');
       return;
     }
-    onConfirm(selectedKeys);
+    if (meals && selectedMealIds.length === 0) {
+      alert('لطفاً حداقل یک وعده غذایی را جهت گزارش‌گیری انتخاب کنید.');
+      return;
+    }
+    onConfirm(selectedKeys, selectedMealIds);
     onClose();
   };
 
@@ -114,6 +133,54 @@ export default function ExportSelectionModal({
                 </p>
               </div>
             </div>
+
+            {/* Meal Selector Section */}
+            {meals && meals.length > 0 && (
+              <div className="px-6 pt-4">
+                <div className="bg-slate-950/20 border border-slate-800 rounded-xl p-4">
+                  <label className="block text-slate-300 text-xs font-bold mb-3">
+                    وعده‌های غذایی مورد نظر جهت درج در گزارش:
+                  </label>
+                  <div className="flex flex-wrap gap-2.5">
+                    {meals.map((meal) => {
+                      const isMealChecked = selectedMealIds.includes(meal.id);
+                      return (
+                        <button
+                          key={meal.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedMealIds(prev =>
+                              prev.includes(meal.id)
+                                ? prev.length > 1 ? prev.filter(id => id !== meal.id) : prev
+                                : [...prev, meal.id]
+                            );
+                          }}
+                          className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs font-extrabold transition-all cursor-pointer ${
+                            isMealChecked
+                              ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 shadow-sm'
+                              : 'bg-slate-950/40 border-slate-850 text-slate-400 hover:border-slate-800 hover:text-slate-300'
+                          }`}
+                        >
+                          <div className="shrink-0">
+                            {isMealChecked ? (
+                              <div className="w-4 h-4 rounded bg-amber-500 flex items-center justify-center">
+                                <Check className="h-3 w-3 text-slate-950 stroke-[3px]" />
+                              </div>
+                            ) : (
+                              <div className="w-4 h-4 rounded border-2 border-slate-700 bg-transparent" />
+                            )}
+                          </div>
+                          <span>{meal.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-2 font-medium">
+                    * می‌توانید همزمان یک وعده خاص یا چند وعده (مثلاً ناهار و شام یا هر سه وعده) را تیک بزنید تا به صورت یکجا و ادغام شده گزارش شوند.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Content Area with Checkboxes */}
             <div className="p-6 overflow-y-auto max-h-[350px] space-y-4">
